@@ -1,0 +1,1297 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+#Prepare Data
+### 1.1) Import packages
+```{r message=FALSE}
+#load libraries
+library(dplyr)
+library(ggpubr)
+library(Seurat)
+require(scales)
+library(tidyr)
+library(ggplot2)
+
+source("Import10X-HelperFunctions_SeuratV3.R")
+outputFolder<-"snRNA-SEQ_MouseHeart/Seurat/"
+sink(file = "snRNA-SEQ_MouseHeart/Seurat/Mariana_snRNA-SEQ_Mouse_Heart_Seurat3.rmd.log", append = TRUE, split = TRUE)
+```
+
+
+### 1.2) Define static parameters
+```{r}
+#Static Parameters 
+
+Sample.Paths <- c("snRNA-SEQ_MouseHeart/cellranger/1_D938/outs/filtered_feature_bc_matrix/",
+"snRNA-SEQ_MouseHeart/cellranger/2_D942/outs/filtered_feature_bc_matrix/",
+"snRNA-SEQ_MouseHeart/cellranger/3_D943/outs/filtered_feature_bc_matrix/",
+"snRNA-SEQ_MouseHeart/cellranger/4_W923/outs/filtered_feature_bc_matrix/",
+"snRNA-SEQ_MouseHeart/cellranger/5_W928/outs/filtered_feature_bc_matrix/",
+"snRNA-SEQ_MouseHeart/cellranger/6_W932/outs/filtered_feature_bc_matrix/")
+
+Samplenames <- c("WT-1","WT-2","WT-3","DNMT3A-1","DNMT3A-2","DNMT3A-3")
+```
+
+
+
+```{r}
+tmpList<-list()
+SeuratObjectList <- list()
+for (i in 1:length(Sample.Paths)) {
+  tmpList<-Importer(pathway = Sample.Paths[i],id = Samplenames[i], FilterCells = TRUE)
+  print(tmpList[[2]])
+  SeuratObjectList[[i]]<-tmpList[[1]]
+}
+```
+
+###1.3) Integrate Data
+```{r}
+SeuratObject.anchors <- FindIntegrationAnchors(object.list = SeuratObjectList, dims = 1:20)
+SeuratObject.combined <- IntegrateData(anchorset = SeuratObject.anchors, dims = 1:20)
+
+table(SeuratObject.combined$orig.ident)
+```
+
+###1.4) Performn Clustering
+```{r}
+DefaultAssay(object = SeuratObject.combined) <- "integrated"
+
+# Run the standard workflow for visualization and clustering
+SeuratObject.combined <- ScaleData(object = SeuratObject.combined, verbose = FALSE)
+SeuratObject.combined <- RunPCA(object = SeuratObject.combined, npcs = 30, verbose = FALSE)
+# t-SNE and Clustering
+SeuratObject.combined <- RunUMAP(object = SeuratObject.combined, reduction = "pca", dims = 1:10)
+SeuratObject.combined <- FindNeighbors(object = SeuratObject.combined, reduction = "pca", dims = 1:10)
+SeuratObject.combined <- FindClusters(SeuratObject.combined, resolution = 0.3)
+```
+
+```{r}
+SeuratObject.combined$seurat_clusters<-SeuratObject.combined$integrated_snn_res.0.3
+```
+
+```{r}
+SeuratObject.combined_ClusterTree<-BuildClusterTree(object = SeuratObject.combined, assay = "RNA", verbose = T)
+PlotClusterTree(SeuratObject.combined_ClusterTree)
+```
+
+### 1.5) Umap plots
+
+
+```{r fig.height=10, fig.width=20}
+require(cowplot)
+# Visualization
+
+# Suppl Fig 5 A & B
+p1<-DimPlot(object = SeuratObject.combined, reduction = "umap", group.by = "orig.ident",pt.size = 1)
+p2<-DimPlot(object = SeuratObject.combined, reduction = "umap", label = TRUE,pt.size = 1, label.size = 9)
+plot_grid(p1,p2)
+
+DimPlot(object = SeuratObject.combined, reduction = "umap", label = TRUE, split.by = "orig.ident")
+Idents(SeuratObject.combined)<-"seurat_clusters"
+DimPlot(object = SeuratObject.combined, reduction = "umap", label = TRUE, split.by = "condition", label.size = 8, pt.size = 1)
+```
+
+###1.6) Find Cluster specific Markers
+```{r}
+SeuratObject.combined.markers <- FindAllMarkers(object = SeuratObject.combined, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+top20<-SeuratObject.combined.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_logFC)
+write.csv(top20, file = paste0(outputFolder,"top20ClusterMarkers.csv"))
+write.csv(SeuratObject.combined.markers, file = paste0(outputFolder,"ClusterMarkers.csv"))
+```
+
+
+```{r}
+SeuratObject.combined_ClusterTree<-BuildClusterTree(object = SeuratObject.combined, assay = "RNA", verbose = T)
+PlotClusterTree(SeuratObject.combined_ClusterTree)
+```
+
+```{r}
+SeuratObject.combined$seurat_clusters<-SeuratObject.combined$integrated_snn_res.0.3
+```
+
+Find Cluster specific Markers
+```{r}
+DefaultAssay(SeuratObject.combined)<-"RNA"
+
+SeuratObject.combined.markers <- FindAllMarkers(object = SeuratObject.combined, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+top20<-SeuratObject.combined.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.csv(top20, file = paste0(outputFolder,"top20ClusterMarkers.csv"))
+write.csv(SeuratObject.combined.markers, file = paste0(outputFolder,"ClusterMarkers.csv"))
+```
+
+```{r, fig.height=8, fig.width=10}
+top20<-SeuratObject.combined.markers %>% group_by(cluster) %>% top_n(n = 5, wt = avg_log2FC)
+DotPlot(SeuratObject.combined, features = unique(top20$gene)) + theme(axis.text.x = element_text(angle = 90)) + coord_flip()
+```
+
+###1.7)Annotate Celltypes
+```{r}
+Idents(SeuratObject.combined)<-"seurat_clusters"
+table(Idents(SeuratObject.combined))
+SeuratObject.combined <- RenameIdents(SeuratObject.combined, 
+                                      `0` = "CM", 
+                                      `1` = "CM", 
+                                      `2` = "EC", 
+                                      `3` = "FB", 
+                                      `4` = "Macrophages", 
+                                      `5` = "CM", 
+                                      `6` = "PC", 
+                                      `7` = "CM", 
+                                      `8` = "B-Cells",
+                                      `9` = "EC-FB",
+                                      `10` = "T-Cells"
+                                       )
+SeuratObject.combined$celltypes<-Idents(SeuratObject.combined)
+table(SeuratObject.combined$celltypes)
+DimPlot(SeuratObject.combined, label = T)
+```
+
+
+### 1.8) Barplot of cell per cluster
+```{r fig.height=10, fig.width=15}
+# Counting celltypes in timepoints
+library(tidyr)
+
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(Seurat)
+library(stringr)
+V<- SeuratObject.combined@meta.data
+orig.ident.ordered<-str_sort(unique(SeuratObject.combined@meta.data$orig.ident),numeric = TRUE)
+V$orig.ident<-factor(V$orig.ident,levels = orig.ident.ordered)
+V$res.0.6<-factor(V$celltypes)
+
+Summary.Celltypes <- V %>% count(orig.ident,res.0.6,.drop = FALSE) %>% group_by(orig.ident) %>%
+  mutate(freq = n /sum(n)) %>% complete(res.0.6,fill = list(n=0,freq=0))
+
+Summary.Celltypes$res.0.6 <- factor(Summary.Celltypes$res.0.6)
+condition<-c()
+for (x in Summary.Celltypes$orig.ident) {
+  tmp<-unlist(strsplit(x,split = "-"))
+  cx<-paste0(tmp[1:length(tmp)-1],collapse = "-")
+  
+  condition<-c(condition,cx)
+  
+}
+Summary.Celltypes$condition<-condition
+
+#svg(filename = paste0(outputFolder,"/Barplot-CellsperClusterPerSample.svg"),width = 15, height = 10)
+
+ggplot(Summary.Celltypes, aes(x=orig.ident, y= freq, fill= condition))+
+  geom_col(width = 0.9, color = "black")+
+  facet_wrap(~res.0.6, nrow = 4, scales = "free")+
+  scale_y_continuous(name = "Percent per Celltype", labels = scales::percent_format())+
+  theme(panel.background = element_blank(),
+        strip.text = element_text(size=12),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust= 1, size = 10))
+
+```
+
+### 1.9) DEG WT vs DNMT3A
+```{r}
+Idents(SeuratObject.combined)<-"condition"
+#Idents(SeuratObject.combined)<-"seurat_clusters"
+table(Idents(SeuratObject.combined))
+DEG_DNMT3A_vs_WT<-FindMarkers(SeuratObject.combined, ident.1 = "DNMT3A", ident.2 = "WT", logfc.threshold = 0.05)
+openxlsx::write.xlsx(DEG_DNMT3A_vs_WT, file = paste0(outputFolder,"DEG_DNMT3A_vs_WT.xlsx"), rowNames=T, colNames=T)
+```
+
+### 1.10) DEG WT vs DNMT3A Volcano plot
+```{r}
+
+if (!requireNamespace('BiocManager', quietly = TRUE))
+    install.packages('BiocManager')
+  BiocManager::install('EnhancedVolcano')
+```
+
+```{r}
+library(EnhancedVolcano)
+EnhancedVolcano(DEG_DNMT3A_vs_WT,
+    rownames(DEG_DNMT3A_vs_WT),
+    x = 'avg_log2FC',
+    y = 'p_val_adj',
+    title = 'DNMT3A versus WT',
+    pCutoff = 0.05,
+    FCcutoff = 0.05,
+    pointSize = 3.0,
+    labSize = 6.0)
+```
+
+# 2.) Figures
+### Figure 4g
+```{r}
+DimPlot(SeuratObject.combined, group.by = "celltypes", label=T, label.size = 5)
+```
+
+### Figure 4h
+```{r}
+Idents(SeuratObject.combined)<-"celltypes"
+SeuratObject.FB<-subset(SeuratObject.combined, idents = "FB")
+Idents(SeuratObject.FB)<-"condition"
+table(Idents(SeuratObject.FB))
+
+#Col1a1, Col3a1 in fibroblasten violin plots (Mean±s.e.m)
+DotPlot(SeuratObject.FB, features = c("Col3a1", "Pdgfra", "Col1a1","Tgfb2","Fn1","Postn"), group.by = "condition", pt.size = 0) + labs(tag = "Fibroblasts")
+ggsave("SVG/Dotplot_FB_Col1a1_Col3a1_by_orig.ident.svg", height = 7, width = 10, device = "svg")
+
+```
+
+### Figure 4i
+```{r}
+avg<-AverageExpression(SeuratObject.FB, features = c("Col3a1","Postn","Pdgfra"), group.by = "orig.ident")
+openxlsx::write.xlsx(avg, file = "Mouse_FB_AVG_Col3a1_Postn_Pdgfra.xlsx", col.names=TRUE, row.names=TRUE)
+# Average expresison values were plottet with Graphpad
+
+```
+
+### Figure 4j
+```{r}
+Idents(SeuratObject.combined)<-"celltypes"
+SeuratObject.MC<-subset(SeuratObject.combined, idents = "Macrophages")
+avg<-AverageExpression(SeuratObject.MC, features = c("Ccr2"), group.by = "orig.ident")
+openxlsx::write.xlsx(avg, file = "Mouse_MC_AVG_Crr2.xlsx", col.names=TRUE, row.names=TRUE)
+# Average expresison values were plottet with Graphpad
+```
+
+
+
+
+### Suppl Fig 5C
+```{r}
+top2<-SeuratObject.combined.markers %>% group_by(cluster) %>% top_n(n = 5, wt = avg_logFC)
+DotPlot(SeuratObject.combined, features = unique(top2$gene))
+```
+
+### Suppl Fig 5D
+```{r}
+genes.all<-as.data.frame(rownames(SeuratObject.combined@assays$RNA))
+genes<-c("Ttn","Ryr2","Cdh5","Pdgfra", "Pecam1","Cd163", "Cd74", "Lyz2","Vcam1", "Dcn", "Rgs5", "Pdgfrb", "Cd3e",)
+DotPlot(SeuratObject.combined, features = genes) + theme(axis.text.x = element_text(angle = 90)) + coord_flip()
+
+```
+
+### Suppl Fig 5E (!!! TODO Mariana)
+```{r}
+
+```
+
+### Suppl Fig 5F,G,H
+```{r}
+Idents(SeuratObject.combined)<-"celltypes"
+S_MC_FB<-subset(SeuratObject.combined, idents = c("FB","Macrophages"))
+S_MC_FB$celltypes<-droplevels(S_MC_FB$celltypes)
+
+DefaultAssay(S_MC_FB)<-"RNA"
+S_MC_FB <- ScaleData(object = S_MC_FB, verbose = FALSE)
+S_MC_FB<-FindVariableFeatures(S_MC_FB)
+S_MC_FB <- RunPCA(object = S_MC_FB, npcs = 30, verbose = FALSE)
+# t-SNE and Clustering
+S_MC_FB <- RunUMAP(object = S_MC_FB, reduction = "pca", dims = 1:10)
+S_MC_FB <- FindNeighbors(object = S_MC_FB, reduction = "pca", dims = 1:10)
+S_MC_FB <- FindClusters(S_MC_FB, resolution = 0.4)
+
+
+p1<-DimPlot(S_MC_FB, group.by = "celltypes")
+p2<-DimPlot(S_MC_FB, group.by = "seurat_clusters", label = T, label.size = 5)
+p3<-FeaturePlot(S_MC_FB, features = "Ccr2", label = T, label.size = 4)
+p4<-VlnPlot(S_MC_FB, features = "Ccr2", split.by = "condition")
+ggsave(plot = p, filename = "Ccr2_FB_MC.svg", width = 10, height = 8, bg = "white", device = "svg")
+```
+
+
+### Suppl Fig 7D,E,F,G 
+```{r}
+VlnPlot(SeuratObject.MC, features = c("Ar", "Hbegf"), group.by = "orig.ident", pt.size = 1) + labs(tag = "MP")
+ggsave("/VLNPLOT_MP_Ar_Hbegf_by_orig.ident.svg", height = 7, width = 10, device = "svg")
+
+avg<-AverageExpression(SeuratObject.MC, features = c("Hbegf", "Ar"), group.by = "orig.ident")
+openxlsx::write.xlsx(avg, file = "Mouse_MC_AVG_Hbegf_.xlsx", col.names=TRUE, row.names=TRUE)
+
+
+!!! TODO Mariana
+DEG_DNMT3A_vs_WT<-FindMarkers(SeuratObject.MC, ident.1 = "DNMT3A", ident.2 = "WT", features=c("Hbegf", "Ar"))
+# Raw values were plotted via Graphpad
+```
+
+
+
+
+
+
+
+
+```{r}
+library(EnhancedVolcano)
+EnhancedVolcano(DEG_DNMT3A_vs_WT_FB,
+    rownames(DEG_DNMT3A_vs_WT_FB),
+    x = 'avg_log2FC',
+    y = 'p_val_adj',
+    title = 'DNMT3A versus WT FB',
+    pCutoff = 0.05,
+    FCcutoff = 0.05,
+    pointSize = 3.0,
+    labSize = 6.0)
+
+```
+##Subset EC
+```{r}
+Idents(SeuratObject.combined)<-"celltypes"
+SeuratObject.EC<-subset(SeuratObject.combined, idents = "EC")
+Idents(SeuratObject.EC)<-"condition"
+table(Idents(SeuratObject.EC))
+DEG_DNMT3A_vs_WT_EC<-FindMarkers(SeuratObject.EC, ident.1 = "DNMT3A", ident.2 = "WT", logfc.threshold = 0.05)
+openxlsx::write.xlsx(DEG_DNMT3A_vs_WT_EC, file = paste0(outputFolder,"DEG_DNMT3A_vs_WT_EC.xlsx"), rowNames=T, colNames=T)
+```
+
+```{r}
+library(EnhancedVolcano)
+EnhancedVolcano(DEG_DNMT3A_vs_WT_EC,
+    rownames(DEG_DNMT3A_vs_WT_EC),
+    x = 'avg_log2FC',
+    y = 'p_val_adj',
+    title = 'DNMT3A versus WT EC',
+    pCutoff = 0.05,
+    FCcutoff = 0.05,
+    pointSize = 3.0,
+    labSize = 6.0)
+
+```
+```{r}
+
+VlnPlot(
+  object = SeuratObject.FB,
+  features = c('Col1a1','Col3a1', 'Acta2', 'Postn', 'Fn1', 'Egfr'),
+  group.by = "condition",
+  cols = RColorBrewer::brewer.pal("Set3", n=11),
+  pt.size = 0.1,
+ #sort = 'increasing',
+  assay = 'RNA'
+)
+```
+
+```{r}
+df<-DO.Mean.SEM.Graphs(SeuratObject = SeuratObject.FB, Features = features, returnValues = T)
+```
+
+
+```{r}
+Idents(SeuratObject.combined)<-"condition"
+features<-c('Col1a1','Col3a1', 'Acta2', 'Postn', 'Fn1')
+DEG.FB.Markers.WTvsDNMT3A<-FindMarkers(SeuratObject.combined, ident.1 = "WT", ident.2 = "DNMT3A", features = features, min.pct = 0, min.diff.pct = 0, logfc.threshold = 0)
+
+
+```
+
+
+#Cellchat All Cells DNMT3A vs WT
+```{r}
+#load libraries
+library(dplyr)
+library(ggpubr)
+library(ggplot2)
+require(scales)
+library(reshape2)
+library(Seurat)
+library(tidyverse)
+library(leiden)
+source("/media/EOS_ZMM_shared/Bioinformatic/scRNA-SEQ-ZMM/Import10X-HelperFunctions_SeuratV3.R")
+```
+
+
+
+```{r}
+
+install.packages('NMF')
+devtools::install_github("jokergoo/circlize")
+devtools::install_github("jokergoo/ComplexHeatmap")
+devtools::install_github("sqjin/CellChat")
+library(CellChat)
+library(patchwork)
+options(stringsAsFactors = FALSE)
+```
+
+```{r}
+setwd("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/");
+outputFolder<-"/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/"
+sink(file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/Cellchat_AllCell.log", append = FALSE, split = TRUE)
+```
+
+```{r}
+SeuratObject.combined<-readRDS("Mariana_Heart_DNMT3A_WT_FlorianLeuschner_25.08.22_CURRENT_Labels_Exchanged.Rds")
+```
+
+```{r}
+#####--divide datasets and choose only tissue and NO CHIP/CHIP monocytes (04.05.23)
+
+Idents(SeuratObject.combined)<-"condition"
+S_WT<-subset(SeuratObject.combined, idents = c("WT"))
+S_DNMT3A<-subset(SeuratObject.combined, idents = c("DNMT3A"))
+```
+
+
+```{r}
+####---Create CellChat Objects
+
+library(CellChat)
+Idents(S_WT) <- S_WT$celltypes
+S_WT <- createCellChat(object = S_WT, group.by = "celltypes", assay = "RNA")
+
+Idents(S_DNMT3A) <- S_DNMT3A$celltypes
+CellChat.S_DNMT3A <- createCellChat(object = S_DNMT3A, group.by = "celltypes", assay = "RNA")
+```
+
+
+```{r}
+###---Load Database,use CellChatDB.mouse if running on mouse data
+
+CellChatDB <- CellChatDB.mouse
+showDatabaseCategory(CellChatDB)
+
+#Subset DB if necessary
+CellChat.S_WT@DB <- CellChatDB
+CellChat.S_DNMT3A@DB <- CellChatDB
+```
+
+```{r}
+# subset the expression data of signaling genes for saving computation cost
+CellChat.S_WT <- subsetData(CellChat.S_WT) 
+CellChat.S_DNMT3A <- subsetData(CellChat.S_DNMT3A) 
+
+# This step is necessary even if using the whole database
+
+CellChat.S_WT <- identifyOverExpressedGenes(CellChat.S_WT)
+CellChat.S_WT <- identifyOverExpressedInteractions(CellChat.S_WT)
+
+CellChat.S_DNMT3A <- identifyOverExpressedGenes(CellChat.S_DNMT3A)
+CellChat.S_DNMT3A <- identifyOverExpressedInteractions(CellChat.S_DNMT3A)
+
+# project gene expression data onto PPI network (optional)
+CellChat.S_WT <- projectData(CellChat.S_WT, PPI.mouse)
+CellChat.S_DNMT3A <- projectData(CellChat.S_DNMT3A, PPI.mouse)
+```
+
+```{r}
+CellChat.S_WT<- computeCommunProb(CellChat.S_WT, raw.use = FALSE)
+CellChat.S_DNMT3A <- computeCommunProb(CellChat.S_DNMT3A, raw.use = FALSE)
+
+# Filter out the cell-cell communication if there are only few number of cells in certain cell groups
+CellChat.S_WT <- filterCommunication(CellChat.S_WT, min.cells = 10)
+CellChat.S_DNMT3A <- filterCommunication(CellChat.S_DNMT3A, min.cells = 10)
+```
+
+```{r}
+#Infer the cell-cell communication at a signaling pathway level
+CellChat.S_WT <- computeCommunProbPathway(CellChat.S_WT)
+CellChat.S_DNMT3A <- computeCommunProbPathway(CellChat.S_DNMT3A)
+```
+
+```{r}
+CellChat.S_WT <- aggregateNet(CellChat.S_WT)
+CellChat.S_DNMT3A <- aggregateNet(CellChat.S_DNMT3A)
+```
+
+```{r}
+pdf("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/NumberOfInteraction_WT_2.pdf", height = 5, width = 9)
+
+groupSize <- as.numeric(table(CellChat.S_WT@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+groupSize <- as.numeric(table(CellChat.S_WT@idents))
+par(mfrow = c(1,2))
+
+netVisual_circle(CellChat.S_WT@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(CellChat.S_WT@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+dev.off()
+```
+
+```{r}
+pdf("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/NumberOfInteraction_DNMT3A_2.pdf", height = 5, width = 9)
+groupSize <- as.numeric(table(CellChat.S_DNMT3A@idents))
+par(mfrow = c(1,2))
+netVisual_circle(CellChat.S_DNMT3A@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(CellChat.S_DNMT3A@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+dev.off()
+```
+
+
+
+```{r}
+#Due to the complicated cell-cell communication network, we can examine the signaling sent from each cell group. Here we also control the parameter edge.weight.max so that we can compare edge weights between differet networks.
+pdf(file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/NetVisualCircle_WT.pdf")
+groupSize <- as.numeric(table(CellChat.S_WT@idents))
+
+mat <- CellChat.S_WT@net$weight
+par(mfrow = c(3,3), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+dev.off()
+```
+
+```{r}
+pdf(file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/NetVisualCircle_DNMT3A.pdf")
+groupSize <- as.numeric(table(CellChat.S_DNMT3A@idents))
+
+mat <- CellChat.S_DNMT3A@net$weight
+par(mfrow = c(3,3), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+dev.off()
+```
+
+```{r}
+# Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+pdf(file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/NetAnalysis_WT.pdf", height = 10, width = 8)
+CellChat.S_WT <- netAnalysis_computeCentrality(CellChat.S_WT, slot.name = "netP")
+netAnalysis_signalingRole_network(CellChat.S_WT, width = 8, height = 2.5, font.size = 10)
+ht1 <- netAnalysis_signalingRole_heatmap(CellChat.S_WT, pattern = "outgoing")
+ht2 <- netAnalysis_signalingRole_heatmap(CellChat.S_WT, pattern = "incoming")
+ht1+ht2
+dev.off()
+
+pdf(file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/NetAnalysis_DNMT3A.pdf",  height = 10, width = 8)
+CellChat.S_DNMT3A <- netAnalysis_computeCentrality(CellChat.S_DNMT3A, slot.name = "netP")
+netAnalysis_signalingRole_network(CellChat.S_DNMT3A, width = 8, height = 2.5, font.size = 10)
+ht3 <- netAnalysis_signalingRole_heatmap(CellChat.S_DNMT3A, pattern = "outgoing")
+ht4 <- netAnalysis_signalingRole_heatmap(CellChat.S_DNMT3A, pattern = "incoming")
+ht3+ht4
+dev.off()
+```
+
+
+```{r}
+saveRDS(CellChat.S_WT, file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/AllCells_Cellchat_WT.rds")
+saveRDS(CellChat.S_DNMT3A, file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/AllCells_Cellchat_DNMT3A.rds")
+```
+
+
+#Cellchat Comparison All Cells
+```{r}
+CellChat.S_WT <- readRDS("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/AllCells_Cellchat_WT.rds")
+CellChat.S_DNMT3A <- readRDS("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/AllCells_Cellchat_DNMT3A.rds")
+CellChat.S_WT <- updateCellChat(CellChat.S_WT)
+CellChat.S_DNMT3A <- updateCellChat(CellChat.S_DNMT3A)
+```
+
+
+```{r}
+object.list <- list(WT = CellChat.S_WT, DNMT3A = CellChat.S_DNMT3A)
+cellchat <- mergeCellChat(object.list, add.names = names(object.list), cell.prefix = TRUE)
+#> Merge the following slots: 'data.signaling','net', 'netP','meta', 'idents', 'var.features' , 'DB', and 'LR'.
+cellchat
+#> An object of class CellChat created from a merged object with multiple datasets 
+```
+
+```{r}
+    #Sender (Outgiong interactions)
+    sender.interactions.WT<-as.data.frame(CellChat.S_WT@net$count)
+    df<-data.frame(Celltype=rownames(sender.interactions.WT), Interactions=rowSums(sender.interactions.WT), Condition="WT")
+
+    sender.interactions.DNMT3A<-as.data.frame(CellChat.S_DNMT3A@net$count)
+    tmp<-data.frame(Celltype=rownames(sender.interactions.DNMT3A), Interactions=rowSums(sender.interactions.DNMT3A), Condition="DNMT3A")
+
+    interactions.sender.combined<-rbind(df,tmp)
+    p1 <- ggplot(interactions.sender.combined, aes(reorder(Celltype, -Interactions), y = Interactions, fill = Condition))+
+      geom_bar(stat = "identity", position = position_dodge2()) + labs(title = "Outgoing Interactions per Celltype", y = "Outgoing Interactions") + 
+      theme(plot.title = element_text(hjust = 0.5))
+
+    #Receiver (Incoming interactions)
+    incoming.interactions.WT<-as.data.frame(CellChat.S_WT@net$count)
+    df<-data.frame(Celltype=colnames(incoming.interactions.WT), Interactions=colSums(incoming.interactions.WT), Condition="WT")
+
+    incoming.interactions.DNMT3A<-as.data.frame(CellChat.S_WT@net$count)
+    tmp<-data.frame(Celltype=colnames(incoming.interactions.DNMT3A), Interactions=colSums(incoming.interactions.DNMT3A), Condition="DNMT3A")
+
+    df<-rbind(df,tmp)
+    p2 <- ggplot(df, aes(x = reorder(Celltype, -Interactions), y = Interactions, fill = Condition))+
+      geom_bar(stat = "identity", position = position_dodge2()) + labs(title = "Incoming Interactions per Celltype", y = "Incoming Interactions") + 
+      theme(plot.title = element_text(hjust = 0.5))
+
+ggarrange(p1,p2)
+ggsave("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/Incoming-OuntgoingInteractinos_WT_vs_DNMT3A.svg", height = 5, width = 12, device = "svg")    
+```
+
+```{r}
+gg1 <- compareInteractions(cellchat, show.legend = F, group = c(1,2))
+gg2 <- compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = "weight")
+gg1 + gg2
+ggsave("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/NumberOfInteractinos_WT_vs_DNMT3A.svg", height = 8, width = 7, device = "svg") 
+```
+
+
+```{r}
+pdf("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/NumberOfInteractinos_Circle_WT_vs_DNMT3A.pdf", height = 8, width = 7)
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(cellchat, weight.scale = T)
+netVisual_diffInteraction(cellchat, weight.scale = T, measure = "weight")
+dev.off()
+```
+
+
+```{r}
+gg1 <- netVisual_heatmap(cellchat)
+#> Do heatmap based on a merged object
+gg2 <- netVisual_heatmap(cellchat, measure = "weight")
+#> Do heatmap based on a merged object
+gg1 + gg2
+ggsave("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/NumberOfInteractinos_Heatmap_WT_vs_DNMT3A.svg", height = 8, width = 7, device = "svg") 
+```
+
+
+```{r}
+pdf("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/NetVisualCircle_WT_vs_DNMT3A.pdf_WT_vs_DNMT3A.pdf", height = 8, width = 7)
+weight.max <- getMaxWeight(object.list, attribute = c("idents","count"))
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_circle(object.list[[i]]@net$count, weight.scale = T, label.edge= F, edge.weight.max = weight.max[2], edge.width.max = 12, title.name = paste0("Number of interactions - ", names(object.list)[i]))
+}
+dev.off()
+```
+
+```{r}
+num.link <- sapply(object.list, function(x) {rowSums(x@net$count) + colSums(x@net$count)-diag(x@net$count)})
+weight.MinMax <- c(min(num.link), max(num.link)) # control the dot size in the different datasets
+gg <- list()
+for (i in 1:length(object.list)) {
+  gg[[i]] <- netAnalysis_signalingRole_scatter(object.list[[i]], title = names(object.list)[i], weight.MinMax = weight.MinMax)
+}
+#> Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+#> Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+patchwork::wrap_plots(plots = gg)
+ggsave("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/InteractionStrength_Scatter_WT_vs_DNMT3A.svg", height = 8, width = 7, device = "svg") 
+```
+
+
+
+
+
+
+```{r}
+table(cellchat@idents$joint)
+table(cellchat@idents$WT)
+table(cellchat@idents$DNMT3A)
+
+gg1 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "CM")
+gg2 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "EC")
+gg3 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "FB")
+gg4 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "Macrophages")
+gg5 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "PC")
+gg6 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "B-Cells")
+
+p<-patchwork::wrap_plots(plots = list(gg1,gg2,gg3,gg4,gg5,gg6))
+ggsave("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/Signaling_changes_per_celltype_WT_vs_DNMT3A.svg", height = 10, width = 20, device = "svg") 
+```
+
+```{r}
+cellchat <- computeNetSimilarityPairwise(cellchat, type = "functional")
+#> Compute signaling network similarity for datasets 1 2
+cellchat <- netEmbedding(cellchat, type = "functional", umap.method = "uwot")
+#> Manifold learning of the signaling networks for datasets 1 2
+cellchat <- netClustering(cellchat, type = "functional", do.parallel = F)
+#> Classification learning of the signaling networks for datasets 1 2
+# Visualization in 2D-space
+netVisual_embeddingPairwise(cellchat, type = "functional", label.size = 3.5)
+#> 2D visualization of signaling networks from datasets 1 2
+```
+
+```{r}
+netVisual_embeddingZoomIn(cellchat, type = "functional", nCol = 2)
+```
+
+```{r}
+gg1 <- rankNet(cellchat, mode = "comparison",  sources.use = c("FB"), targets.use = "Macrophages", stacked = T, do.stat = TRUE)
+gg2 <- rankNet(cellchat, mode = "comparison", sources.use = c("FB"), targets.use = "Macrophages", stacked = F, do.stat = TRUE)
+gg1 + gg2
+ggsave("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/InformationFlow_FB_to_Macrophages_celltype_WT_vs_DNMT3A.svg", height = 10, width = 10, device = "svg")
+```
+
+```{r}
+gg1 <- rankNet(cellchat, mode = "comparison", stacked = T, do.stat = TRUE)
+gg2 <- rankNet(cellchat, mode = "comparison", stacked = F, do.stat = TRUE)
+gg1 + gg2
+ggsave("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/RankNet_ALL_WT_vs_DNMT3A.svg", height = 10, width = 10, device = "svg")
+```
+#Stopped Here
+```{r}
+library(ComplexHeatmap)
+#> Loading required package: grid
+#> ========================================
+#> ComplexHeatmap version 2.10.0
+#> Bioconductor page: http://bioconductor.org/packages/ComplexHeatmap/
+#> Github page: https://github.com/jokergoo/ComplexHeatmap
+#> Documentation: http://jokergoo.github.io/ComplexHeatmap-reference
+#> 
+#> If you use it in published research, please cite:
+#> Gu, Z. Complex heatmaps reveal patterns and correlations in multidimensional 
+#>   genomic data. Bioinformatics 2016.
+#> 
+#> The new InteractiveComplexHeatmap package can directly export static 
+#> complex heatmaps into an interactive Shiny app with zero effort. Have a try!
+#> 
+#> This message can be suppressed by:
+#>   suppressPackageStartupMessages(library(ComplexHeatmap))
+#> ========================================
+i = 1
+# combining all the identified signaling pathways from different datasets 
+pathway.union <- union(object.list[[i]]@netP$pathways, object.list[[i+1]]@netP$pathways)
+ht1 = netAnalysis_signalingRole_heatmap(object.list[[i]],pattern = "outgoing", signaling = c('EGF', 'PDGF', 'TGFb','COLLAGEN', 'IL6'), title = names(object.list)[i], width = 5, height = 6)
+ht2 = netAnalysis_signalingRole_heatmap(object.list[[i+1]], pattern = "outgoing", signaling = c('EGF', 'PDGF', 'TGFb', 'COLLAGEN', 'IL6'), title = names(object.list)[i+1], width = 5, height = 6)
+draw(ht1 + ht2, ht_gap = unit(0.5, "cm"))
+```
+
+
+```{r}
+netVisual_bubble(cellchat, sources.use = 5, targets.use = (1:3), comparison = c(1, 2), angle.x = 45, font.size = 5)
+#> Comparing communications on a merged object
+```
+
+```{r}
+rankSimilarity(cellchat, type = "functional")
+#> Compute the distance of signaling networks between datasets 1 2
+```
+
+```{r}
+gg1 <- netVisual_bubble(cellchat, sources.use = 5, targets.use = 3,  comparison = c(1, 2), max.dataset = 2, title.name = "Increased signaling in CHIP", angle.x = 45, remove.isolate = T, thresh = 0.05)
+#> Comparing communications on a merged object
+gg2 <- netVisual_bubble(cellchat, sources.use = 5, targets.use = 3,  comparison = c(1, 2), max.dataset = 1, title.name = "Decreased signaling in CHIP", angle.x = 45, remove.isolate = T, thresh = 0.05)
+#> Comparing communications on a merged object
+gg1 + gg2
+```
+
+```{r}
+# define a positive dataset, i.e., the dataset with positive fold change against the other dataset
+pos.dataset = "DNMT3A"
+# define a char name used for storing the results of differential expression analysis
+features.name = pos.dataset
+# perform differential expression analysis
+cellchat <- identifyOverExpressedGenes(cellchat, group.dataset = "datasets", pos.dataset = pos.dataset, features.name = features.name, only.pos = FALSE, thresh.pc = 0.1, thresh.fc = 0.1, thresh.p = 0.05)
+#> Use the joint cell labels from the merged CellChat object
+# map the results of differential expression analysis onto the inferred cell-cell communications to easily manage/subset the ligand-receptor pairs of interest
+net <- netMappingDEG(cellchat, features.name = features.name)
+# extract the ligand-receptor pairs with upregulated ligands in CHIP
+net.up <- subsetCommunication(cellchat, net = net, datasets = "DNMT3A",ligand.logFC = 0.1, receptor.logFC = NULL)
+# extract the ligand-receptor pairs with upregulated ligands and upregulated recetptors No chip, i.e.,downregulated in Chip
+net.down <- subsetCommunication(cellchat, net = net, datasets = "WT",ligand.logFC = -0.1, receptor.logFC = -0.1)
+```
+
+```{r}
+gene.up <- extractGeneSubsetFromPair(net.up, cellchat)
+gene.down <- extractGeneSubsetFromPair(net.down, cellchat)
+library(openxlsx)
+write.xlsx(net.up,"/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/Cellchat_DNMT3A_vsWT_DNMT3A_up.xlsx")
+write.xlsx(net.down,"/mnt/david2/scStorage/Mariana/Cellchat_PBMC_HFrEF_REVISION/Comparison/2Cellchat_DNMT3A_vsWT_DNMT3A_down.xlsx")
+```
+
+```{r}
+pairLR.use.up = net.up[, "interaction_name", drop = F]
+gg1 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.up, sources.use = c(4,5), targets.use = c(3), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Up-regulated signaling in ", names(object.list)[2]))
+#> Comparing communications on a merged object
+pairLR.use.down = net.down[, "interaction_name", drop = F]
+gg2 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.down, sources.use = c(4,5), targets.use = c(1:3), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Down-regulated signaling in ", names(object.list)[2]))
+#> Comparing communications on a merged object
+gg1 + gg2
+```
+
+```{r}
+# Chord diagram
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_chord_gene(object.list[[2]], sources.use = 5, targets.use = c(3), slot.name = 'net', net = net.up, lab.cex = 0.8, small.gap = 3.5, title.name = paste0("Up-regulated signaling in ", names(object.list)[2]))
+netVisual_chord_gene(object.list[[1]], sources.use = 5, targets.use = c(3), slot.name = 'net', net = net.down, lab.cex = 0.8, small.gap = 3.5, title.name = paste0("Down-regulated signaling in ", names(object.list)[2]))
+```
+
+
+#------------------------------
+#Cellchat FB & Macropahes (Subclustered)
+```{r}
+SeuratObject.combined<-readRDS("Mariana_Heart_DNMT3A_WT_FlorianLeuschner_25.08.22_CURRENT_Labels_Exchanged.Rds")
+```
+
+
+
+```{r}
+setwd("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages_subclustered/");
+outputFolder<-"/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages_subclustered/"
+sink(file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages_subclustered/Cellchat_FB_MC_subclustered.log", append = FALSE, split = TRUE)
+```
+
+```{r}
+Idents(SeuratObject.combined)<-"celltypes"
+S_MC_FB<-subset(SeuratObject.combined, idents = c("FB","Macrophages"))
+S_MC_FB$celltypes<-droplevels(S_MC_FB$celltypes)
+```
+
+###Recluster FB and Macrophages
+```{r}
+DefaultAssay(S_MC_FB)<-"RNA"
+S_MC_FB <- ScaleData(object = S_MC_FB, verbose = FALSE)
+S_MC_FB<-FindVariableFeatures(S_MC_FB)
+S_MC_FB <- RunPCA(object = S_MC_FB, npcs = 30, verbose = FALSE)
+# t-SNE and Clustering
+S_MC_FB <- RunUMAP(object = S_MC_FB, reduction = "pca", dims = 1:10)
+S_MC_FB <- FindNeighbors(object = S_MC_FB, reduction = "pca", dims = 1:10)
+S_MC_FB <- FindClusters(S_MC_FB, resolution = 0.4)
+```
+#inspect ne clusters
+```{r}
+p1<-DimPlot(S_MC_FB, group.by = "celltypes")
+p2<-DimPlot(S_MC_FB, group.by = "seurat_clusters", label = T, label.size = 5)
+p3<-FeaturePlot(S_MC_FB, features = "Ccr2", label = T, label.size = 4)
+p4<-VlnPlot(S_MC_FB, features = "Ccr2", split.by = "condition")
+
+ggsave(plot = p, filename = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages_subclustered/Ccr2_in subclusters.svg", width = 10, height = 8, bg = "white", device = "svg")
+
+p<-ggarrange(p1,p2,p3,p4, ncol = 1)
+p<-annotate_figure(p, top=text_grob("Mariana Mouse Hearts", 
+               color = "black", face = "bold", size = 10), bottom=text_grob("Ccr2 expression in Fibrobalsts Macrophages subclustered",color = "black", face = "plain", size = 10))
+ggsave(plot = p, filename = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages_subclustered/Ccr2_in subclusters.svg", width = 5, height = 20, bg = "white", device = "svg")
+#p5<-DO.Mean.SEM.Graphs(S_MC_FB, Features = "Ccr2", group.by = "seurat_clusters")
+
+
+```
+
+
+
+####Rename FB Subclusters
+```{r}
+Idents(S_MC_FB)<-"seurat_clusters"
+
+S_MC_FB <- RenameIdents(object = S_MC_FB, 
+                                                   '0' = "FB",
+                                                   '1' = "FB",
+                                                   '2' = "Ccr2+ Macrophages",
+                                                   '3' = "Ccr2- Macrophages",
+                                                   '4' = "FB",
+                                                   '5' = "Ccr2+ Macrophages",
+                                                   '6' = "Ccr2- Macrophages",
+                                                   '7' = "Ccr2+ Macrophages",
+                                                   '8' = "FB"
+                                                   )
+S_MC_FB$celltypes_FB_MP_subclusters<-Idents(S_MC_FB)
+```
+
+```{r}
+
+p1<-DimPlot(S_MC_FB, group.by = "celltypes", label = TRUE, label.size = 5)
+p2<-DimPlot(S_MC_FB, group.by = "seurat_clusters", label = TRUE, label.size = 5)
+p3<-VlnPlot(S_MC_FB, features = "Ccr2", group.by = "seurat_clusters")
+p4<-FeaturePlot(S_MC_FB, features = "Ccr2", label = T, label.size = 4)
+p5<-DimPlot(S_MC_FB, group.by = "celltypes_FB_MP_subclusters", label = TRUE, label.size = 2)
+p6<-VlnPlot(S_MC_FB, features = "Ccr2", group.by = "celltypes_FB_MP_subclusters")
+
+
+p<-ggarrange(p1, p2,p3,p4,p5,p6, ncol = 3, nrow = 2)
+ggsave(plot = p, filename = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages_subclustered/Ccr2_in subclusters_renamed.svg", device = "svg", height = 5, width = 15)
+```
+
+```{r}
+
+```
+
+
+
+
+
+
+
+```{r}
+saveRDS(object = S_MC_FB, file = paste0(outputFolder,"SeuratObject.FB.Macrophages.subclusters.RDS"))
+```
+#inspect ne clusters
+```{r}
+DimPlot(S_MC_FB)
+DimPlot(S_MC_FB, group.by = "celltypes")
+DimPlot(S_MC_FB, group.by = "condition")
+
+```
+
+
+
+```{r}
+Idents(S_MC_FB)<-"condition"
+
+S_MC_FB_WT<-subset(S_MC_FB, idents = c("WT"))
+S_MC_FB_DNMT3A<-subset(S_MC_FB, idents = c("DNMT3A"))
+
+Idents(S_MC_FB_WT)<-"celltypes"
+Idents(S_MC_FB_DNMT3A)<-"celltypes"
+```
+
+
+
+
+
+
+
+
+```{r}
+####---Create CellChat Objects
+
+library(CellChat)
+Idents(S_MC_FB_WT) <- S_MC_FB_WT$celltypes
+CellChat.S_MC_FB_WT <- createCellChat(object = S_MC_FB_WT, group.by = "celltypes", assay = "RNA")
+
+Idents(S_MC_FB_DNMT3A) <- S_MC_FB_DNMT3A$celltypes
+CellChat.S_MC_FB_DNMT3A <- createCellChat(object = S_MC_FB_DNMT3A, group.by = "celltypes", assay = "RNA")
+```
+
+
+```{r}
+###---Load Database,use CellChatDB.mouse if running on mouse data
+
+CellChatDB <- CellChatDB.mouse
+showDatabaseCategory(CellChatDB)
+
+#Subset DB if necessary
+CellChat.S_MC_FB_WT@DB <- CellChatDB
+CellChat.S_MC_FB_DNMT3A@DB <- CellChatDB
+```
+
+```{r}
+# subset the expression data of signaling genes for saving computation cost
+CellChat.S_MC_FB_WT <- subsetData(CellChat.S_MC_FB_WT) 
+CellChat.S_MC_FB_DNMT3A <- subsetData(CellChat.S_MC_FB_DNMT3A) 
+
+# This step is necessary even if using the whole database
+
+CellChat.S_MC_FB_WT <- identifyOverExpressedGenes(CellChat.S_MC_FB_WT)
+CellChat.S_MC_FB_WT <- identifyOverExpressedInteractions(CellChat.S_MC_FB_WT)
+
+CellChat.S_MC_FB_DNMT3A <- identifyOverExpressedGenes(CellChat.S_MC_FB_DNMT3A)
+CellChat.S_MC_FB_DNMT3A <- identifyOverExpressedInteractions(CellChat.S_MC_FB_DNMT3A)
+
+# project gene expression data onto PPI network (optional)
+CellChat.S_MC_FB_WT <- projectData(CellChat.S_MC_FB_WT, PPI.mouse)
+CellChat.S_MC_FB_DNMT3A <- projectData(CellChat.S_MC_FB_DNMT3A, PPI.mouse)
+```
+
+```{r}
+CellChat.S_MC_FB_WT<- computeCommunProb(CellChat.S_MC_FB_WT, raw.use = FALSE)
+CellChat.S_MC_FB_DNMT3A <- computeCommunProb(CellChat.S_MC_FB_DNMT3A, raw.use = FALSE)
+
+# Filter out the cell-cell communication if there are only few number of cells in certain cell groups
+CellChat.S_MC_FB_WT <- filterCommunication(CellChat.S_MC_FB_WT, min.cells = 10)
+CellChat.S_MC_FB_DNMT3A <- filterCommunication(CellChat.S_MC_FB_DNMT3A, min.cells = 10)
+```
+
+```{r}
+#Infer the cell-cell communication at a signaling pathway level
+CellChat.S_MC_FB_WT <- computeCommunProbPathway(CellChat.S_MC_FB_WT)
+CellChat.S_MC_FB_DNMT3A <- computeCommunProbPathway(CellChat.S_MC_FB_DNMT3A)
+```
+
+```{r}
+CellChat.S_MC_FB_WT <- aggregateNet(CellChat.S_MC_FB_WT)
+CellChat.S_MC_FB_DNMT3A <- aggregateNet(CellChat.S_MC_FB_DNMT3A)
+```
+
+```{r}
+pdf("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages/NumberOfInteraction_WT.pdf", height = 5, width = 9)
+
+groupSize <- as.numeric(table(CellChat.S_MC_FB_WT@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+groupSize <- as.numeric(table(CellChat.S_MC_FB_WT@idents))
+par(mfrow = c(1,2))
+
+netVisual_circle(CellChat.S_MC_FB_WT@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(CellChat.S_MC_FB_WT@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+dev.off()
+```
+
+```{r}
+pdf("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages/NumberOfInteraction_DNMT3A.pdf", height = 5, width = 9)
+groupSize <- as.numeric(table(CellChat.S_MC_FB_DNMT3A@idents))
+par(mfrow = c(1,2))
+netVisual_circle(CellChat.S_MC_FB_DNMT3A@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(CellChat.S_MC_FB_DNMT3A@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+dev.off()
+```
+
+
+
+```{r}
+#Due to the complicated cell-cell communication network, we can examine the signaling sent from each cell group. Here we also control the parameter edge.weight.max so that we can compare edge weights between differet networks.
+pdf(file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages/NetVisualCircle_FB_MC_WT.pdf")
+groupSize <- as.numeric(table(CellChat.S_MC_FB_WT@idents))
+
+mat <- CellChat.S_MC_FB_WT@net$weight
+par(mfrow = c(3,3), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+dev.off()
+```
+
+```{r}
+pdf(file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages/NetVisualCircle_FB_MC_DNMT3A.pdf")
+groupSize <- as.numeric(table(CellChat.S_MC_FB_DNMT3A@idents))
+
+mat <- CellChat.S_MC_FB_DNMT3A@net$weight
+par(mfrow = c(3,3), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+dev.off()
+```
+
+```{r}
+# Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+pdf(file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages/NetAnalysiS_MC_FB_WT.pdf", height = 10, width = 8)
+CellChat.S_MC_FB_WT <- netAnalysis_computeCentrality(CellChat.S_MC_FB_WT, slot.name = "netP")
+netAnalysis_signalingRole_network(CellChat.S_MC_FB_WT, width = 8, height = 2.5, font.size = 10)
+ht1 <- netAnalysis_signalingRole_heatmap(CellChat.S_MC_FB_WT, pattern = "outgoing")
+ht2 <- netAnalysis_signalingRole_heatmap(CellChat.S_MC_FB_WT, pattern = "incoming")
+ht1+ht2
+dev.off()
+
+pdf(file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages/NetAnalysiS_MC_FB_DNMT3A.pdf",  height = 10, width = 8)
+CellChat.S_MC_FB_DNMT3A <- netAnalysis_computeCentrality(CellChat.S_MC_FB_DNMT3A, slot.name = "netP")
+netAnalysis_signalingRole_network(CellChat.S_MC_FB_DNMT3A, width = 8, height = 2.5, font.size = 10)
+ht3 <- netAnalysis_signalingRole_heatmap(CellChat.S_MC_FB_DNMT3A, pattern = "outgoing")
+ht4 <- netAnalysis_signalingRole_heatmap(CellChat.S_MC_FB_DNMT3A, pattern = "incoming")
+ht3+ht4
+dev.off()
+```
+
+
+```{r}
+saveRDS(CellChat.S_MC_FB_WT, file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages/FB_MC_Cellchat_WT.rds")
+saveRDS(CellChat.S_MC_FB_DNMT3A, file = "/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages/FB_MC_Cellchat_DNMT3A.rds")
+```
+
+
+
+
+
+
+
+#Cellchat Comparison
+
+```{r}
+
+object.list <- list(WT_FB_MP = CellChat.S_MC_FB_WT, DNMT3A_FB_MP = CellChat.S_MC_FB_DNMT3A)
+cellchat <- mergeCellChat(object.list, add.names = names(object.list), cell.prefix = TRUE)
+#> Merge the following slots: 'data.signaling','net', 'netP','meta', 'idents', 'var.features' , 'DB', and 'LR'.
+cellchat
+#> An object of class CellChat created from a merged object with multiple datasets 
+```
+
+```{r}
+    #Sender (Outgiong interactions)
+    sender.interactions.WT<-as.data.frame(CellChat.S_MC_FB_WT@net$count)
+    df<-data.frame(Celltype=rownames(sender.interactions.WT), Interactions=rowSums(sender.interactions.WT), Condition="WT")
+
+    sender.interactions.DNMT3A<-as.data.frame(CellChat.S_MC_FB_DNMT3A@net$count)
+    tmp<-data.frame(Celltype=rownames(sender.interactions.DNMT3A), Interactions=rowSums(sender.interactions.DNMT3A), Condition="DNMT3A")
+
+    interactions.sender.combined<-rbind(df,tmp)
+    p1 <- ggplot(interactions.sender.combined, aes(reorder(Celltype, -Interactions), y = Interactions, fill = Condition))+
+      geom_bar(stat = "identity", position = position_dodge2()) + labs(title = "Outgoing Interactions per Celltype", y = "Outgoing Interactions") + 
+      theme(plot.title = element_text(hjust = 0.5))
+
+    #Receiver (Incoming interactions)
+    incoming.interactions.WT<-as.data.frame(CellChat.S_MC_FB_WT@net$count)
+    df<-data.frame(Celltype=colnames(incoming.interactions.WT), Interactions=colSums(incoming.interactions.WT), Condition="WT")
+
+    incoming.interactions.DNMT3A<-as.data.frame(CellChat.S_MC_FB_DNMT3A@net$count)
+    tmp<-data.frame(Celltype=colnames(incoming.interactions.DNMT3A), Interactions=colSums(incoming.interactions.DNMT3A), Condition="DNMT3A")
+
+    df<-rbind(df,tmp)
+    p2 <- ggplot(df, aes(x = reorder(Celltype, -Interactions), y = Interactions, fill = Condition))+
+      geom_bar(stat = "identity", position = position_dodge2()) + labs(title = "Incoming Interactions per Celltype", y = "Incoming Interactions") + 
+      theme(plot.title = element_text(hjust = 0.5))
+
+ggarrange(p1,p2)
+ggsave("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages//Incoming-OuntgoingInteractinos_FB_MC_WT_vs_DNMT3A.svg", height = 5, width = 12, device = "svg")    
+```
+
+```{r}
+gg1 <- compareInteractions(cellchat, show.legend = F, group = c(2,1))
+gg2 <- compareInteractions(cellchat, show.legend = F, group = c(2,1), measure = "weight")
+gg1 + gg2
+ggsave("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages/NumberOfInteractinos_WT_vs_DNMT3A.svg", height = 8, width = 7, device = "svg") 
+```
+
+
+```{r}
+pdf("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages/NumberOfInteractinos_Circle_FB_MC_WT_vs_DNMT3A.pdf", height = 8, width = 7)
+par(mfrow = c(2,1), xpd=TRUE)
+netVisual_diffInteraction(cellchat, weight.scale = T)
+netVisual_diffInteraction(cellchat, weight.scale = T, measure = "weight")
+dev.off()
+```
+
+
+```{r}
+gg1 <- netVisual_heatmap(cellchat)
+#> Do heatmap based on a merged object
+gg2 <- netVisual_heatmap(cellchat, measure = "weight")
+#> Do heatmap based on a merged object
+gg1 + gg2
+ggsave("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages//NumberOfInteractinos_Heatmap_FB_MC_WT_vs_DNMT3A.svg", height = 8, width = 7, device = "svg") 
+```
+
+
+```{r}
+pdf("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages/NetVisualCircle_FB_MC_WT_vs_DNMT3A.pdf_WT_vs_DNMT3A.pdf", height = 8, width = 7)
+weight.max <- getMaxWeight(object.list, attribute = c("idents","count"))
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_circle(object.list[[i]]@net$count, weight.scale = T, label.edge= F, edge.weight.max = weight.max[2], edge.width.max = 12, title.name = paste0("Number of interactions - ", names(object.list)[i]))
+}
+dev.off()
+```
+
+```{r}
+num.link <- sapply(object.list, function(x) {rowSums(x@net$count) + colSums(x@net$count)-diag(x@net$count)})
+weight.MinMax <- c(min(num.link), max(num.link)) # control the dot size in the different datasets
+gg <- list()
+for (i in 1:length(object.list)) {
+  gg[[i]] <- netAnalysis_signalingRole_scatter(object.list[[i]], title = names(object.list)[i], weight.MinMax = weight.MinMax)
+}
+#> Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+#> Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+patchwork::wrap_plots(plots = gg)
+ggsave("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages//InteractionStrength_Scatter_FB_MC_WT_vs_DNMT3A.svg", height = 8, width = 7, device = "svg") 
+```
+
+
+
+
+
+
+```{r}
+table(cellchat@idents$joint)
+table(cellchat@idents$WT)
+table(cellchat@idents$DNMT3A)
+
+
+gg3 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "FB")
+gg4 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "Macrophages")
+
+p<-patchwork::wrap_plots(plots = list(gg3,gg4))
+ggsave("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages/Signaling_changes_FB_MC_WT_vs_DNMT3A.svg", height = 10, width = 20, device = "svg") 
+```
+
+```{r}
+cellchat <- computeNetSimilarityPairwise(cellchat, type = "functional")
+#> Compute signaling network similarity for datasets 1 2
+cellchat <- netEmbedding(cellchat, type = "functional", umap.method = "uwot")
+#> Manifold learning of the signaling networks for datasets 1 2
+cellchat <- netClustering(cellchat, type = "functional", do.parallel = F)
+#> Classification learning of the signaling networks for datasets 1 2
+# Visualization in 2D-space
+netVisual_embeddingPairwise(cellchat, type = "functional", label.size = 3.5)
+#> 2D visualization of signaling networks from datasets 1 2
+```
+
+```{r}
+netVisual_embeddingZoomIn(cellchat, type = "functional", nCol = 2)
+```
+
+```{r}
+gg1 <- rankNet(cellchat, mode = "comparison", stacked = T, do.stat = TRUE)
+gg2 <- rankNet(cellchat, mode = "comparison", stacked = F, do.stat = TRUE)
+gg1 + gg2
+ggsave("/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_FB_Macrophages/RankNet_ALL_WT_vs_DNMT3A.svg", height = 10, width = 10, device = "svg")
+```
+#Stopped Here
+```{r}
+library(ComplexHeatmap)
+#> Loading required package: grid
+#> ========================================
+#> ComplexHeatmap version 2.10.0
+#> Bioconductor page: http://bioconductor.org/packages/ComplexHeatmap/
+#> Github page: https://github.com/jokergoo/ComplexHeatmap
+#> Documentation: http://jokergoo.github.io/ComplexHeatmap-reference
+#> 
+#> If you use it in published research, please cite:
+#> Gu, Z. Complex heatmaps reveal patterns and correlations in multidimensional 
+#>   genomic data. Bioinformatics 2016.
+#> 
+#> The new InteractiveComplexHeatmap package can directly export static 
+#> complex heatmaps into an interactive Shiny app with zero effort. Have a try!
+#> 
+#> This message can be suppressed by:
+#>   suppressPackageStartupMessages(library(ComplexHeatmap))
+#> ========================================
+i = 1
+# combining all the identified signaling pathways from different datasets 
+pathway.union <- union(object.list[[i]]@netP$pathways, object.list[[i+1]]@netP$pathways)
+ht1 = netAnalysis_signalingRole_heatmap(object.list[[i]],pattern = "outgoing", signaling = c('EGF', 'PDGF', 'TGFb','COLLAGEN', 'IL6'), title = names(object.list)[i], width = 5, height = 6)
+ht2 = netAnalysis_signalingRole_heatmap(object.list[[i+1]], pattern = "outgoing", signaling = c('EGF', 'PDGF', 'TGFb', 'COLLAGEN', 'IL6'), title = names(object.list)[i+1], width = 5, height = 6)
+draw(ht1 + ht2, ht_gap = unit(0.5, "cm"))
+```
+
+
+```{r}
+netVisual_bubble(cellchat, sources.use = 5, targets.use = (1:3), comparison = c(1, 2), angle.x = 45, font.size = 5)
+#> Comparing communications on a merged object
+```
+
+```{r}
+rankSimilarity(cellchat, type = "functional")
+#> Compute the distance of signaling networks between datasets 1 2
+```
+
+```{r}
+gg1 <- netVisual_bubble(cellchat, sources.use = 5, targets.use = 3,  comparison = c(1, 2), max.dataset = 2, title.name = "Increased signaling in CHIP", angle.x = 45, remove.isolate = T, thresh = 0.05)
+#> Comparing communications on a merged object
+gg2 <- netVisual_bubble(cellchat, sources.use = 5, targets.use = 3,  comparison = c(1, 2), max.dataset = 1, title.name = "Decreased signaling in CHIP", angle.x = 45, remove.isolate = T, thresh = 0.05)
+#> Comparing communications on a merged object
+gg1 + gg2
+```
+
+```{r}
+# define a positive dataset, i.e., the dataset with positive fold change against the other dataset
+pos.dataset = "DNMT3A"
+# define a char name used for storing the results of differential expression analysis
+features.name = pos.dataset
+# perform differential expression analysis
+cellchat <- identifyOverExpressedGenes(cellchat, group.dataset = "datasets", pos.dataset = pos.dataset, features.name = features.name, only.pos = FALSE, thresh.pc = 0.1, thresh.fc = 0.1, thresh.p = 0.05)
+#> Use the joint cell labels from the merged CellChat object
+# map the results of differential expression analysis onto the inferred cell-cell communications to easily manage/subset the ligand-receptor pairs of interest
+net <- netMappingDEG(cellchat, features.name = features.name)
+# extract the ligand-receptor pairs with upregulated ligands in CHIP
+net.up <- subsetCommunication(cellchat, net = net, datasets = "DNMT3A",ligand.logFC = 0.1, receptor.logFC = NULL)
+# extract the ligand-receptor pairs with upregulated ligands and upregulated recetptors No chip, i.e.,downregulated in Chip
+net.down <- subsetCommunication(cellchat, net = net, datasets = "WT",ligand.logFC = -0.1, receptor.logFC = -0.1)
+```
+
+```{r}
+gene.up <- extractGeneSubsetFromPair(net.up, cellchat)
+gene.down <- extractGeneSubsetFromPair(net.down, cellchat)
+library(openxlsx)
+write.xlsx(net.up,"/mnt/david2/scStorage/Mariana/Heart_FlorainLeuschner/Cellchat_AllCells/Cellchat_DNMT3A_vsWT_DNMT3A_up.xlsx")
+write.xlsx(net.down,"/mnt/david2/scStorage/Mariana/Cellchat_PBMC_HFrEF_REVISION/Comparison/2Cellchat_DNMT3A_vsWT_DNMT3A_down.xlsx")
+```
+
+```{r}
+pairLR.use.up = net.up[, "interaction_name", drop = F]
+gg1 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.up, sources.use = c(4,5), targets.use = c(3), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Up-regulated signaling in ", names(object.list)[2]))
+#> Comparing communications on a merged object
+pairLR.use.down = net.down[, "interaction_name", drop = F]
+gg2 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.down, sources.use = c(4,5), targets.use = c(1:3), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Down-regulated signaling in ", names(object.list)[2]))
+#> Comparing communications on a merged object
+gg1 + gg2
+```
+
+```{r}
+# Chord diagram
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_chord_gene(object.list[[2]], sources.use = 5, targets.use = c(3), slot.name = 'net', net = net.up, lab.cex = 0.8, small.gap = 3.5, title.name = paste0("Up-regulated signaling in ", names(object.list)[2]))
+netVisual_chord_gene(object.list[[1]], sources.use = 5, targets.use = c(3), slot.name = 'net', net = net.down, lab.cex = 0.8, small.gap = 3.5, title.name = paste0("Down-regulated signaling in ", names(object.list)[2]))
+```
