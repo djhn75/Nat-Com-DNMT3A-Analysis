@@ -1,0 +1,1594 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+#1.) Import Data 
+## 1.1) Import packages
+
+```{r message=FALSE}
+#load libraries
+library(dplyr)
+library(ggpubr)
+library(ggplot2)
+require(scales)
+library(reshape2)
+library(Seurat)
+source("Import10X-HelperFunctions_SeuratV3.R")
+```
+
+```{r}
+setwd("/media/Helios_scStorage/Mariana/AllIntegrated_21.03.23/");
+outputFolder<-"/media/Helios_scStorage/Mariana/AllIntegrated_21.03.23/"
+```
+
+## 1.2) Load Data and assign condition
+```{r Import, message=FALSE}
+###############################################################
+### 1.)           Import and filter Data                   ####
+###############################################################
+setwd("/media/Helios_scStorage/Mariana/AllIntegrated_21.03.23/")
+
+
+#dataset was generated with script from 
+# https://github.com/djhn75/DiseaseHeartCellAtlas
+HCA <- readRDS("/media/Helios_scStorage/SingleCell/Human/WholeHeart/Heart_cell_atlas_aortic_stenosis_harmonized/Harmonized_whole_dataset_only_as_only_septum_only_nuc/seurat_object_hca_as_harmonized_AS_SP_nuc_refined_cells.rds")
+#!Remove as sAMPLES
+HCA$condition <- ifelse(is.na(HCA$condition), "Healthy", "AS")
+
+
+#pbmc's (Chip and no-Chip)
+# dataset was generated with script from 
+# https://github.com/djhn75/Sicelore-scRNA-Integration
+pbmc <- readRDS("/media/Helios_scStorage/Wesley/11275/Mutation.object/DNMT3A.HF.PBMCs.Final.copy.Rds")
+#!Keep only Monocytes
+
+#dataset was generated with script from 
+# https://github.com/MarianoRuzJurado/RuzJurado_et_al_2023/blob/main/paper_code/RCode_RuzJurado_et_al_2023.RMD
+HEART <- readRDS("/media/Helios_scStorage/Mariano/Human_Mice_Comparison/Seurat_and_R_objects/SeuratObject_Human_AS_HFpEF_HFrEF_Ctrl_Annotated_20_10_22.rds")
+#!Only HFrEF
+```
+
+```{r Import, message=FALSE}
+DefaultAssay(HEART)<-"RNA"
+DefaultAssay(pbmc)<-"RNA"
+#Join Heart and PBMC dataset
+SeuratObjectList <- SplitObject(HEART, split.by = "orig.ident")
+SeuratObjectList<- append(SeuratObjectList, SplitObject(pbmc, split.by = "orig.ident"))
+
+```
+
+
+```{r}
+#perform integration
+#plan("multiprocess", workers = 10)
+reference.objects<-c(SeuratObjectList$`Human-AS-n2`, SeuratObjectList$`Human-HFpEF-n1`, SeuratObjectList$`Human-Ctrl-2`,
+                     SeuratObjectList$CHIP1, SeuratObjectList$Control1)
+reference.objects<-c(SeuratObjectList$`Human-AS-n2`)
+SeuratObject.anchors <- FindIntegrationAnchors(object.list = SeuratObjectList, reference = c(1),dims = 1:20, anchor.features = 1000)
+SeuratObject.combined <- IntegrateData(anchorset = SeuratObject.anchors, dims = 1:20, new.assay.name = "Integrated")
+
+table(SeuratObject.anchors)
+```
+
+```{r}
+save.image(file="/media/Helios_scStorage/Mariana/AllIntegrated_21.03.23/workspaceAfterAchoring.Rdata")
+load("/media/Helios_scStorage/Mariana/AllIntegrated_21.03.23/workspaceAfterAchoring.Rdata")
+```
+
+```{r}
+save.image(file="/media/Helios_scStorage/Mariana/AllIntegrated_21.03.23/workspaceAfterIntegration.Rdata")
+load("/media/Helios_scStorage/Mariana/AllIntegrated_21.03.23/workspaceAfterAchoring.Rdata")
+```
+
+```{r}
+#TODO: -cluster coombined object
+DefaultAssay(object = SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes) <- "Integrated"
+
+# Run the standard workflow for visualization and clustering
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes <- ScaleData(object = SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, verbose = FALSE)
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes <- RunPCA(object = SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, npcs = 30, verbose = FALSE)
+# t-SNE and Clustering
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes <- RunUMAP(object = SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, reduction = "pca", dims = 1:10)
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes <- FindNeighbors(object = SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, reduction = "pca", dims = 1:10)
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes <- FindClusters(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, resolution = 0.3)
+```
+
+```{r}
+SeuratObject.combined$seurat_clusters<-SeuratObject.combined$Integrated_snn_res.0.3
+
+```
+
+## 1.3) Umap plots of integrated object
+```{r fig.height=10, fig.width=20}
+require(cowplot)
+# Visualization
+p1<-DimPlot(object = SeuratObject.combined, reduction = "umap", group.by = "orig.ident",pt.size = 1)
+p2<-DimPlot(object = SeuratObject.combined, reduction = "umap", label = TRUE,pt.size = 1, label.size = 9)
+#p3<-DimPlot(object = SeuratObject.combined, reduction = "umap", group.by = "sample",pt.size = 2)
+plot_grid(p1,p2)
+
+DimPlot(object = SeuratObject.combined, reduction = "umap", label = TRUE, split.by = "orig.ident")
+Idents(SeuratObject.combined)<-"seurat_clusters"
+DimPlot(object = SeuratObject.combined, reduction = "umap", label = TRUE, split.by = "condition", label.size = 8, pt.size = 1)
+
+```
+
+```{r}
+DimPlot(SeuratObject.combined, group.by = "condition", label = TRUE)
+DimPlot(SeuratObject.combined, group.by = "celltypes", label = TRUE)
+DimPlot(SeuratObject.combined, group.by = "source", label = TRUE)
+```
+
+## 1.4) Transfer celltypes
+```{r}
+SeuratObject.combined$celltypes_old<-SeuratObject.combined$celltypes
+SeuratObject.combined$cell_type_old<-SeuratObject.combined$cell_type
+
+
+c1<-SeuratObject.combined$cell_type
+c2<-SeuratObject.combined$celltypes
+SeuratObject.combined$celltypes<-coalesce(SeuratObject.combined$celltypes,SeuratObject.combined$cell_type)
+```
+
+## 1.5) Rename conditions and add source to divice PBMC's from HCA
+```{r}
+SeuratObject.combined$source<-ifelse(is.na(SeuratObject.combined$disease),"sc-RNA-SEQ", "sn-RNA-SEQ")
+SeuratObject.combined$condition<-gsub("Control","NO-CHIP",SeuratObject.combined$condition)
+```
+
+```{r}
+DefaultAssay(SeuratObject.combined)<-"RNA"
+saveRDS(SeuratObject.combined, file="/media/Helios_scStorage/Mariana/AllIntegrated_21.03.23/SeuratObjectIntegrated_Heart-PBMC-HCA_Integrated.Rdata")
+```
+
+## 1.6)Subset samples to remove "moderate" from PBMC object and "CTRL.LV", "AS", "HFpEF" from HCA object
+```{r}
+Idents(SeuratObject.combined)<-"condition"
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP <- subset(SeuratObject.combined, idents = c("Human-HFrEF","Human_CTRLsp","CHIP","NO-CHIP"))
+table(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP$condition)
+
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP)<-"celltypes"
+table(Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP), SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP$source)
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes <- subset(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP, idents = c("Monocytes","Cardiomyocytes","Pericytes","Endothelial","Fibroblasts","Neuro","Immune.cells","Smooth.Muscle"))
+table(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes$celltypes, SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes$orig.ident)
+
+```
+
+## 1.7)safe object for paper Mariana (25.04.23)
+```{r}
+saveRDS(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, file="/media/Helios_scStorage/Mariana/AllIntegrated_21.03.23/SeuratObjectIntegrated_Heart-PBMC-HCA_Integrated_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes.24.04.23.Rdata")
+
+```
+
+## 1.8)load object for paper Mariana (27.04.23)
+```{r}
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes <- readRDS(file="/media/Helios_scStorage/Mariana/AllIntegrated_21.03.23/SeuratObjectIntegrated_Heart-PBMC-HCA_Integrated_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes.24.04.23.Rdata")
+```
+
+# 2.) Figures
+
+###Suppl. Figure 2a 
+```{r}
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"condition"
+SO <- subset(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, idents = c('Human-HFrEF','Human_CTRLsp'))
+DimPlot(SO, group.by = "condition", label = TRUE)
+DimPlot(SO, group.by = "source", label = TRUE)
+DimPlot(SO, group.by = "condition", label = TRUE)
+```
+
+```{r}
+PBMC <- readRDS("/media/Helios_scStorage/Wesley/11275/Mutation.object/DNMT3A.HF.PBMCs.Final.copy.Rds")
+Idents(PBMC)<-"celltypes"
+Monocytes <- subset(PBMC, idents= "Monocytes")
+Idents(Monocytes)<-"condition"
+Monocytes <- subset(Monocytes, idents = c("Control", "CHIP"))
+p2<-DimPlot(Monocytes,reduction = "umap", group.by ='condition', pt.size = 1,label = TRUE)
+plot(p2)
+```
+
+## Figure 1b, Suppl. Figure 2a
+```{r}
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"condition"
+DimPlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, group.by = "condition", label = TRUE)
+DimPlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, group.by = "source", label = TRUE)
+DimPlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, group.by = "seurat_clusters", label = TRUE)
+SO <- subset(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, idents = c('Human-HFrEF','Human_CTRLsp'))
+DimPlot(SO, group.by = "condition", label = TRUE)
+```
+
+## Figure 1c
+```{r}
+DefaultAssay(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"RNA"
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"celltypes"
+DimPlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, group.by = "celltypes", label = TRUE)
+```
+## Suppl. Figure 2c,d
+```{r}
+DefaultAssay(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"RNA"
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"seurat_clusters"
+p2<-FeaturePlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, feature=c("TNNT2","CDH5","DCN", 'PDGFRB', 'MYH11', 'PTPRC'), label = F)
+p3<-FeaturePlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, feature=c('CCR2'), label = F)
+plot(p2)
+plot(p3)
+```
+
+```{r}
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes.markers <- FindAllMarkers(object = SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+top20<-SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes.markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC)
+openxlsx::write.xlsx(top20, file = paste0(outputFolder,"top20ClusterMarkers.xlsx"), rowNames=TRUE, colNames=TRUE)
+openxlsx::write.xlsx(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes.markers, file = paste0(outputFolder,"ClusterMarkers.xlsx"), rowNames=TRUE, colNames=TRUE)
+```
+
+
+```{r}
+topGenes<-SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes.markers %>% group_by(cluster) %>% top_n(n = 7, wt = avg_log2FC)
+
+p1<-DotPlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, features = unique(topGenes$gene), cols = c("grey","red")) + theme(axis.text.y = element_text(size = 7),axis.text.x = element_text(size = 12, angle = 90),  legend.position = 'right')+ rotate()
+plot(p1)
+ggsave(plot = p1,filename = paste0(outputFolder,"ClusterMarkers.png"), device = "png", width = 6, height = 10, bg = 'white')
+```
+
+## Figure 1d
+```{r}
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"celltypes"
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes) <- factor(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes@active.ident, sort(levels(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes@active.ident)))
+
+topGenes<-c ('TTN', 'TNNT2', 'RYR2', 'MYH7', 'VWF','TIE1', 'PECAM', 'ICAM', 'ENG', 'EMCN', 'CDH5', 'PDGFRA', 'MMP2', 'LAMB1', 'DPT', 'DDR2', 'DCN', 'COL1A1', 'COL1A2', 'ADAMTS5', 'CD163','LYVE1','C1QA', 'FOLR2','FLT3','PTPRC', 'LYZ','CCR2',  'CD74', 'CD163',   'CEBPB', 'S100A8', 'CCL13', 'CCL18',  'CD68', 'CD14', 'CD8A', 'IL7R', 'CD40LG', 'NRXN3','PLP1', 'NRXN1', 'ERBB3', 'PDGFRB','RGS5', 'KCNJ8', 'ABBC9', 'TAGLN', 'MYH11', 'ACTA2')
+
+
+p1<-DotPlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, features = unique(topGenes ), cols = c("grey","red")) + theme(axis.text.y = element_text(size = 7),axis.text.x = element_text(size = 12, angle = 90),  legend.position = 'right')+ rotate()
+plot(p1)
+ggsave(plot = p1,filename = paste0(outputFolder,"ClusterMarkers.png"), device = "png", width = 6, height = 10, bg = 'white')
+```
+
+###2.1) CellChat monocytes and healthy cardiac tissue
+
+```{r message=FALSE}
+#load libraries
+library(dplyr)
+library(ggpubr)
+library(ggplot2)
+require(scales)
+library(reshape2)
+library(Seurat)
+library(tictoc)
+library(tidyverse)
+library(leiden)
+source("/media/EOS_ZMM_shared/Bioinformatic/scRNA-SEQ-ZMM/Import10X-HelperFunctions_SeuratV3.R")
+```
+
+###Load CellChat packages
+
+```{r}
+install.packages('NMF')
+devtools::install_github("jokergoo/circlize")
+devtools::install_github("jokergoo/ComplexHeatmap")
+devtools::install_github("sqjin/CellChat")
+library(CellChat)
+library(patchwork)
+options(stringsAsFactors = FALSE)
+```
+
+```{r}
+setwd("/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/");
+outputFolder<-"/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/"
+sink(file = "/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/Cellchat_PBMC_HCA_new.rmd.log", append = FALSE, split = TRUE)
+```
+
+###Load object for paper Mariana (04.05.23)
+
+```{r}
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes <- readRDS(file="/media/Helios_scStorage/Mariana/AllIntegrated_21.03.23/SeuratObjectIntegrated_Heart-PBMC-HCA_Integrated_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes.24.04.23.Rdata")
+
+table(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes$condition)
+```
+
+```{r}
+p1<-DimPlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, group.by = "condition", label = TRUE, label.size = 5)
+p2<-DimPlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, group.by = "celltypes", label = TRUE, label.size = 5)
+p3<-DimPlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, group.by = "source", label = TRUE, label.size = 5)
+p<-ggarrange(p1, p2,p3, ncol = 3)
+ggsave("/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/SVG/UMAP_HCA_HFrEF_ALL_condition_source_cell_types.svg", device = "svg", height = 5, width = 15, plot = p)
+```
+
+###Choose only healthy cardiac tissue and all monocytes (04.05.23)
+
+```{r}
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"condition"
+HCA_ALL<-subset(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, idents = c("Human_CTRLsp","CHIP","NO-CHIP"))
+table(HCA_ALL$condition)
+```
+
+```{r}
+p1<-DimPlot(HCA_ALL, group.by = "source", label = TRUE, pt.size = 0.005, label.size = 4)
+p2<-DimPlot(HCA_ALL, group.by = "condition", label = TRUE, pt.size = 0.005, label.size = 4)
+p3<-DimPlot(HCA_ALL, group.by = "celltypes", label = TRUE, pt.size = 0.005, label.size = 4)
+plot(p1)
+plot(p2)
+plot(p3)
+p<-ggarrange(p1,p2,p3, ncol = 3)
+ggsave("/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/SVG/UMAP_HCA_ALL_source_condition_cell_types.svg", device = "svg", height = 5, width = 15, plot = p)
+```
+
+```{r}
+Idents(HCA_ALL)<-"seurat_clusters"
+p1<-FeaturePlot(HCA_ALL, feature=c("CCR2"), label = T, pt.size = 0.005, label.size = 5) + theme(legend.position = "None")
+Idents(HCA_ALL)<-"celltypes"
+p2<-FeaturePlot(HCA_ALL, feature=c("CCR2"), label = T, pt.size = 0.005, label.size = 5)
+p<-ggarrange(p1,p2)
+ggsave("/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/SVG/UMAP_HCA_ALL_CCR2_clusters_cell_types.svg", device = "svg", height = 5, width = 15, plot = p)
+```
+
+###Divide datasets and choose only Human_CTRLsp and NO CHIP/CHIP monocytes (04.05.23)
+
+```{r}
+Idents(HCA_ALL)<-"condition"
+HCA_NO_CHIP<-subset(HCA_ALL, idents = c("Human_CTRLsp", "NO-CHIP"))
+HCA_CHIP<-subset(HCA_ALL, idents = c("Human_CTRLsp", "CHIP"))
+```
+
+###Create CellChat Objects
+
+```{r}
+library(CellChat)
+Idents(HCA_NO_CHIP) <- HCA_NO_CHIP$celltypes
+CellChat.HCA_NO_CHIP <- createCellChat(object = HCA_NO_CHIP, group.by = "celltypes", assay = "RNA")
+
+Idents(HCA_CHIP) <- HCA_CHIP$celltypes
+CellChat.HCA_CHIP <- createCellChat(object = HCA_CHIP, group.by = "celltypes", assay = "RNA")
+```
+
+```{r}
+CellChatDB <- CellChatDB.human
+showDatabaseCategory(CellChatDB)
+
+#Subset DB if necessary
+CellChat.HCA_NO_CHIP@DB <- CellChatDB
+CellChat.HCA_CHIP@DB <- CellChatDB
+```
+
+###Create gene expression data and cell-cell communication network
+```{r}
+# subset the expression data of signaling genes for saving computation cost
+CellChat.HCA_NO_CHIP <- subsetData(CellChat.HCA_NO_CHIP) 
+CellChat.HCA_CHIP <- subsetData(CellChat.HCA_CHIP) 
+
+# This step is necessary even if using the whole database
+
+CellChat.HCA_NO_CHIP <- identifyOverExpressedGenes(CellChat.HCA_NO_CHIP)
+CellChat.HCA_NO_CHIP <- identifyOverExpressedInteractions(CellChat.HCA_NO_CHIP)
+
+CellChat.HCA_CHIP <- identifyOverExpressedGenes(CellChat.HCA_CHIP)
+CellChat.HCA_CHIP <- identifyOverExpressedInteractions(CellChat.HCA_CHIP)
+
+# project gene expression data onto PPI network (optional)
+CellChat.HCA_NO_CHIP <- projectData(CellChat.HCA_NO_CHIP, PPI.human)
+CellChat.HCA_CHIP <- projectData(CellChat.HCA_CHIP, PPI.human)
+```
+
+```{r}
+CellChat.HCA_NO_CHIP<- computeCommunProb(CellChat.HCA_NO_CHIP, raw.use = FALSE)
+CellChat.HCA_CHIP <- computeCommunProb(CellChat.HCA_CHIP, raw.use = FALSE)
+
+# Filter out the cell-cell communication if there are only few number of cells in certain cell groups
+CellChat.HCA_NO_CHIP <- filterCommunication(CellChat.HCA_NO_CHIP, min.cells = 10)
+CellChat.HCA_CHIP <- filterCommunication(CellChat.HCA_CHIP, min.cells = 10)
+```
+
+```{r}
+#Infer the cell-cell communication at a signaling pathway level
+CellChat.HCA_NO_CHIP <- computeCommunProbPathway(CellChat.HCA_NO_CHIP)
+CellChat.HCA_CHIP <- computeCommunProbPathway(CellChat.HCA_CHIP)
+```
+
+```{r}
+CellChat.HCA_NO_CHIP <- aggregateNet(CellChat.HCA_NO_CHIP)
+CellChat.HCA_CHIP <- aggregateNet(CellChat.HCA_CHIP)
+```
+
+```{r}
+groupSize <- as.numeric(table(CellChat.HCA_NO_CHIP@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_circle(CellChat.HCA_NO_CHIP@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(CellChat.HCA_NO_CHIP@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+```
+
+```{r}
+groupSize <- as.numeric(table(CellChat.HCA_CHIP@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_circle(CellChat.HCA_CHIP@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(CellChat.HCA_CHIP@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+```
+
+
+```{r}
+mat <- CellChat.HCA_NO_CHIP@net$weight
+par(mfrow = c(3,3), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+```
+
+```{r}
+mat <- CellChat.HCA_CHIP@net$weight
+par(mfrow = c(3,3), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+```
+
+```{r}
+# Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+CellChat.HCA_NO_CHIP <- netAnalysis_computeCentrality(CellChat.HCA_NO_CHIP, slot.name = "netP")
+netAnalysis_signalingRole_network(CellChat.HCA_NO_CHIP, width = 8, height = 2.5, font.size = 10)
+ht1 <- netAnalysis_signalingRole_heatmap(CellChat.HCA_NO_CHIP, pattern = "outgoing")
+ht2 <- netAnalysis_signalingRole_heatmap(CellChat.HCA_NO_CHIP, pattern = "incoming")
+ht1+ht2
+
+CellChat.HCA_CHIP <- netAnalysis_computeCentrality(CellChat.HCA_CHIP, slot.name = "netP")
+netAnalysis_signalingRole_network(CellChat.HCA_CHIP, width = 8, height = 2.5, font.size = 10)
+ht3 <- netAnalysis_signalingRole_heatmap(CellChat.HCA_CHIP, pattern = "outgoing")
+ht4 <- netAnalysis_signalingRole_heatmap(CellChat.HCA_CHIP, pattern = "incoming")
+
+```
+
+##Figure 6g
+
+```{r}
+pathways.show <- c("EGF") 
+# Hierarchy plot
+# Here we define `vertex.receive` so that the left portion of the hierarchy plot shows signaling to fibroblast and the right portion shows signaling to monocytes 
+vertex.receiver = seq(3,5) # a numeric vector. 
+netVisual_aggregate(CellChat.HCA_NO_CHIP, signaling = pathways.show,  vertex.receiver = vertex.receiver)
+# Circle plot
+par(mfrow=c(1,1))
+netVisual_aggregate(CellChat.HCA_NO_CHIP, signaling = pathways.show, layout = "circle")
+```
+
+```{r}
+pathways.show <- c("EGF") 
+# Hierarchy plot
+# Here we define `vertex.receive` so that the left portion of the hierarchy plot shows signaling to fibroblast and the right portion shows signaling to monocytes 
+vertex.receiver = seq(3,5) # a numeric vector. 
+netVisual_aggregate(CellChat.HCA_CHIP, signaling = pathways.show,  vertex.receiver = vertex.receiver)
+# Circle plot
+par(mfrow=c(1,1))
+netVisual_aggregate(CellChat.HCA_CHIP, signaling = pathways.show, layout = "circle")
+```
+
+```{r}
+# Chord diagram
+par(mfrow=c(1,1))
+netVisual_aggregate(CellChat.HCA_NO_CHIP, signaling = pathways.show, layout = "chord")
+```
+
+```{r}
+saveRDS(CellChat.HCA_NO_CHIP, file = "/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/20230519_CellChat_HCA_NO_CHIP.rds")
+saveRDS(CellChat.HCA_CHIP, file = "/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/20230519_CellChat_HCA_CHIP.rds")
+```
+
+###Compare generated CellChat objects healthy cardiac tissue and all monocytes
+
+```{r setup}
+library(Seurat)
+library(ggplot2)
+library(SeuratDisk)
+library(harmony)
+library(tictoc)
+library(tidyverse)
+```
+
+```{r} 
+devtools::install_github("sqjin/CellChat")
+library(CellChat)
+library(patchwork)
+options(stringsAsFactors = FALSE)
+
+```
+
+```{r}
+source("/media/EOS_ZMM_shared/Bioinformatic/scRNA-SEQ-ZMM/Import10X-HelperFunctions_SeuratV3.R")
+outputFolder<-"/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/Comparison"
+sink(file = "/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/Comparison/Cellchat_PBMC_HCA_Comparison_REVISION.rmd.log", append = FALSE, split = TRUE)
+```
+
+```{r}
+Cellchat.HCA_NO_CHIP <- readRDS("/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/20230519_CellChat_HCA_NO_CHIP.rds")
+Cellchat.HCA_CHIP <- readRDS("/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/20230519_CellChat_HCA_CHIP.rds")
+Cellchat.HCA_NO_CHIP <- updateCellChat(Cellchat.HCA_NO_CHIP)
+Cellchat.HCA_CHIP <- updateCellChat(Cellchat.HCA_CHIP)
+```
+
+
+```{r}
+object.list <- list(HCA_NO_CHIP = Cellchat.HCA_NO_CHIP, HCA_CHIP = Cellchat.HCA_CHIP)
+cellchat <- mergeCellChat(object.list, add.names = names(object.list), cell.prefix = TRUE)
+#> Merge the following slots: 'data.signaling','net', 'netP','meta', 'idents', 'var.features' , 'DB', and 'LR'.
+cellchat
+#> An object of class CellChat created from a merged object with multiple datasets 
+#> 
+```
+
+##Figure 1e
+```{r}
+    #Sender (Outgoing interactions)
+    sender.interactions.nochip<-as.data.frame(Cellchat.HCA_NO_CHIP@net$count)
+    df<-data.frame(Celltype=rownames(sender.interactions.nochip), Interactions=rowSums(sender.interactions.nochip), Condition="NO-CHIP")
+
+    sender.interactions.chip<-as.data.frame(Cellchat.HCA_CHIP@net$count)
+    tmp<-data.frame(Celltype=rownames(sender.interactions.chip), Interactions=rowSums(sender.interactions.chip), Condition="WITH_CHIP")
+
+    interactions.sender.combined<-rbind(df,tmp)
+    p1 <- ggplot(interactions.sender.combined, aes(x =reorder(Celltype, -Interactions), y = Interactions, fill = Condition))+
+      geom_bar(stat = "identity", position = position_dodge2()) + labs(title = "Outgoing Interactions per Celltype", y = "Outgoing Interactions") + 
+      theme(plot.title = element_text(hjust = 0.5))
+
+    #Receiver (Incoming interactions)
+    incoming.interactions.nochip<-as.data.frame(Cellchat.HCA_NO_CHIP@net$count)
+    df<-data.frame(Celltype=colnames(sender.interactions.nochip), Interactions=colSums(sender.interactions.nochip), Condition="NO-CHIP")
+
+    incoming.interactions.nochip<-as.data.frame(Cellchat.HCA_CHIP@net$count)
+    tmp<-data.frame(Celltype=colnames(sender.interactions.chip), Interactions=colSums(sender.interactions.chip), Condition="WITH_CHIP")
+
+    df<-rbind(df,tmp)
+    p2 <- ggplot(df, aes(x = reorder(Celltype, -Interactions), y = Interactions, fill = Condition))+
+      geom_bar(stat = "identity", position = position_dodge2()) + labs(title = "Incoming Interactions per Celltype", y = "Incoming Interactions") + 
+      theme(plot.title = element_text(hjust = 0.5))
+
+    ggarrange(p1,p2)
+openxlsx::write.xlsx(interactions.sender.combined, file = paste0(outputFolder,"interactions.sender.combined.xlsx"), rowNames=T, colNames=T)
+openxlsx::write.xlsx(df, file = paste0(outputFolder,"interactions.receiver.combined.xlsx"), rowNames=T, colNames=T)
+
+#Use data from xlsx to prepare graph (autocrine interactions and interactions with IC excluded)
+
+library(tidyr)
+HCA_NO_CHIP <- c(117, 114, 123, 104, 105, 97)
+HCA_WITH_CHIP <- c(121, 119, 127, 102, 112, 101)
+
+name <- c("CM", "EC", "FB", "NC", "PC", "SMC")
+
+df_outgoing_HCA <- data.frame(HCA_NO_CHIP,HCA_WITH_CHIP, name)
+df_outgoing_HCA2 <- df_outgoing_HCA[, c(2, 1, 3)]
+
+df2 <- tidyr::pivot_longer(df_outgoing_HCA2, cols=c('HCA_NO_CHIP','HCA_WITH_CHIP'), names_to='variable', 
+values_to="value")
+head(df2)
+
+ggplot(df2, aes(x= reorder(name, -value), y=value, fill=variable)) +
+               geom_bar(stat='identity', position='dodge') + 
+               labs(y= "Number of interactions", x= ' ') + 
+               ggtitle("                      MC outgoing signals, HCA") +
+  theme(
+    panel.background = element_rect(fill='transparent'), #transparent panel bg
+    plot.background = element_rect(fill='transparent', color=NA), #transparent plot bg
+    panel.grid.major = element_blank(), #remove major gridlines
+    panel.grid.minor = element_blank(), #remove minor gridlines
+    legend.background = element_rect(fill='transparent'), #transparent legend bg
+     #transparent legend panel
+  )
+ggsave("SVG/Number_of_interactions_barplot.NOCHIP_vs_CHIP.svg", height = 5, width = 12)
+```
+
+##Figure 6a
+
+```{r}
+gg1 <- rankNet(cellchat, mode = "comparison",  sources.use = 5, targets.use = 3, stacked = T, do.stat = TRUE,  thresh = 0.05, cutoff.pvalue = 0.05)
+gg2 <- rankNet(cellchat, mode = "comparison", sources.use = 5, targets.use = 3, stacked = F, do.stat = TRUE,  thresh = 0.05, cutoff.pvalue = 0.05)
+gg1 + gg2
+```
+
+```{r}
+gg1 <- rankNet(cellchat, mode = "comparison",  sources.use = 5, targets.use = 3, stacked = T, do.stat = FALSE,  thresh = 0.05, cutoff.pvalue = 0.05, signaling = c('NPR2', 'IL1','EGF', 'RESISTIN', 'CCL', 'IGF', 'PARS', 'COMPLEMENT', 'SEMA4A'))
+gg2 <- rankNet(cellchat, mode = "comparison", sources.use = 5, targets.use = 3, stacked = F, do.stat = FALSE,  thresh = 0.05, cutoff.pvalue = 0.05, signaling = c('NPR2', 'IL1','EGF', 'RESISTIN', 'CCL', 'IGF', 'PARS', 'COMPLEMENT', 'SEMA4A'))
+gg1 + gg2
+ggsave(gg1 + gg2, "SVG/Information_flow.HCA.NOCHIP_vs_CHIP.svg", height = 5, width = 12)
+```
+
+## Figure 6c, d.1
+```{r}
+# define a positive dataset, i.e., the dataset with positive fold change against the other dataset
+pos.dataset = "HCA_CHIP"
+# define a char name used for storing the results of differential expression analysis
+features.name = pos.dataset
+# perform differential expression analysis
+cellchat <- identifyOverExpressedGenes(cellchat, group.dataset = "datasets", pos.dataset = pos.dataset, features.name = features.name, only.pos = FALSE, thresh.pc = 0.1, thresh.fc = 0.1, thresh.p = 0.05)
+#> Use the joint cell labels from the merged CellChat object
+# map the results of differential expression analysis onto the inferred cell-cell communications to easily manage/subset the ligand-receptor pairs of interest
+net <- netMappingDEG(cellchat, features.name = features.name)
+# extract the ligand-receptor pairs with upregulated ligands in CHIP
+net.up <- subsetCommunication(cellchat, net = net, datasets = "HCA_CHIP",ligand.logFC = 0.1, receptor.logFC = NULL)
+# extract the ligand-receptor pairs with upregulated ligands and upregulated recetptors No chip, i.e.,downregulated in Chip
+net.down <- subsetCommunication(cellchat, net = net, datasets = "HCA_NO_CHIP",ligand.logFC = -0.1, receptor.logFC = -0.1)
+```
+
+```{r}
+gene.up <- extractGeneSubsetFromPair(net.up, cellchat)
+gene.down <- extractGeneSubsetFromPair(net.down, cellchat)
+library("writexl")
+write_xlsx(net.up,"/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/Comparison/20230530_Cellchat_PBMC_HCA_LR_pairs_increased_from_monocytes_NEW_NET.xlsx")
+write_xlsx(net.down,"/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/Comparison/20230530_Cellchat_PBMC_HCA_LR_pairs_decreased_from_monocytes_NEW_NET.xlsx")
+```
+
+```{r}
+pairLR.use.up = net.up[, "interaction_name", drop = F]
+gg1 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.up, sources.use = 5, targets.use = c(3), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Up-regulated signaling in ", names(object.list)[2]))
+#> Comparing communications on a merged object
+pairLR.use.down = net.down[, "interaction_name", drop = F]
+#gg2 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.down, sources.use = 5, targets.use = c(3), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Down-regulated signaling in ", names(object.list)[2]))
+#> Comparing communications on a merged object
+gg1 
+```
+
+## Figure 6e
+
+```{r}
+bg1 <- netVisual_bubble(cellchat, sources.use = (5), targets.use = c(1:8),  comparison = c(1, 2), max.dataset = 2, title.name = "Increased signaling in HFrEF_CHIP", angle.x = 45, remove.isolate = T, thresh = 0.05)
+#> Comparing communications on a merged object
+bg2 <- netVisual_bubble(cellchat, sources.use = (5), targets.use = c(1:8), comparison = c(1, 2), max.dataset = 1, title.name = "Decreased signaling in HFrEF_CHIP", angle.x = 45, remove.isolate = T, thresh = 0.05)
+#> Comparing communications on a merged object
+bubble1 <- bg1
+bubble2 <- bg2
+
+library("writexl")
+write_xlsx(bubble1$data,"/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/Comparison/20230530_Cellchat_PBMC_HCA_LR_pairs_increased_from_monocytes.xlsx")
+write_xlsx(bubble2$data,"/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/Comparison/20230530_Cellchat_PBMC_HCA_LR_pairs_decreased_from_monocytes.xlsx")
+```
+
+
+```{r}
+bg1 <- netVisual_bubble(cellchat, sources.use = c(1:8), targets.use = c(5),  comparison = c(1, 2), max.dataset = 2, title.name = "Increased signaling in HFrEF_CHIP", angle.x = 45, remove.isolate = T, thresh = 0.05)
+#> Comparing communications on a merged object
+bg2 <- netVisual_bubble(cellchat, sources.use = c(1:8), targets.use = c(5), comparison = c(1, 2), max.dataset = 1, title.name = "Decreased signaling in HFrEF_CHIP", angle.x = 45, remove.isolate = T, thresh = 0.05)
+#> Comparing communications on a merged object
+bubble1 <- bg1
+bubble2 <- bg2
+
+library("writexl")
+write_xlsx(bubble1$data,"/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/Comparison/20230530_Cellchat_PBMC_HCA_LR_pairs_increased_to_monocytes.xlsx")
+write_xlsx(bubble2$data,"/media/Helios_scStorage/Mariana/Cellchat_PBMC_HCA_REVISION/Comparison/20230530_Cellchat_PBMC_HCA_LR_pairs_decreased_to_monocytes.xlsx")
+```
+
+```{r}
+
+VlnPlot(
+  object = cellchat,
+  features = c('Egf'),
+  group.by = "orig.ident",
+  cols = RColorBrewer::brewer.pal("Set3", n=11),
+  pt.size = 0.1,
+ #sort = 'increasing',
+  assay = 'RNA'
+)
+```
+
+```{r}
+saveRDS(cellchat, file = "Comparison_Cellchat_PBMC_NO_CHIP_CHIP_HCA.rds")
+```
+
+###2.2) CellChat monocytes and HFrEF cardiac tissue
+
+```{r message=FALSE}
+#load libraries
+library(dplyr)
+library(ggpubr)
+library(ggplot2)
+require(scales)
+library(reshape2)
+library(Seurat)
+library(tictoc)
+library(tidyverse)
+library(leiden)
+source("/media/EOS_ZMM_shared/Bioinformatic/scRNA-SEQ-ZMM/Import10X-HelperFunctions_SeuratV3.R")
+```
+
+###Load CellChat packages
+
+```{r}
+install.packages('NMF')
+devtools::install_github("jokergoo/circlize")
+devtools::install_github("jokergoo/ComplexHeatmap")
+devtools::install_github("sqjin/CellChat")
+library(CellChat)
+library(patchwork)
+options(stringsAsFactors = FALSE)
+```
+
+```{r}
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"condition"
+HCA_ALL<-subset(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, idents = c("Human-HFrEF","CHIP","NO-CHIP"))
+table(HCA_ALL$condition)
+```
+
+###divide datasets and choose only HFrEF and NO CHIP/CHIP monocytes (06.06.23)
+
+```{r}
+Idents(HCA_ALL)<-"condition"
+HCA_NO_CHIP<-subset(HCA_ALL, idents = c("Human-HFrEF", "NO-CHIP"))
+HCA_CHIP<-subset(HCA_ALL, idents = c("Human-HFrEF", "CHIP"))
+```
+
+###Create CellChat Objects
+
+```{r}
+library(CellChat)
+Idents(HCA_NO_CHIP) <- HCA_NO_CHIP$celltypes
+CellChat.HCA_NO_CHIP <- createCellChat(object = HCA_NO_CHIP, group.by = "celltypes", assay = "RNA")
+
+Idents(HCA_CHIP) <- HCA_CHIP$celltypes
+CellChat.HCA_CHIP <- createCellChat(object = HCA_CHIP, group.by = "celltypes", assay = "RNA")
+```
+
+```{r}
+CellChatDB <- CellChatDB.human
+showDatabaseCategory(CellChatDB)
+
+#Subset DB if necessary
+CellChat.HCA_NO_CHIP@DB <- CellChatDB
+CellChat.HCA_CHIP@DB <- CellChatDB
+```
+
+```{r}
+# subset the expression data of signaling genes for saving computation cost
+CellChat.HCA_NO_CHIP <- subsetData(CellChat.HCA_NO_CHIP) 
+CellChat.HCA_CHIP <- subsetData(CellChat.HCA_CHIP) 
+
+# This step is necessary even if using the whole database
+
+CellChat.HCA_NO_CHIP <- identifyOverExpressedGenes(CellChat.HCA_NO_CHIP)
+CellChat.HCA_NO_CHIP <- identifyOverExpressedInteractions(CellChat.HCA_NO_CHIP)
+
+CellChat.HCA_CHIP <- identifyOverExpressedGenes(CellChat.HCA_CHIP)
+CellChat.HCA_CHIP <- identifyOverExpressedInteractions(CellChat.HCA_CHIP)
+
+# project gene expression data onto PPI network (optional)
+CellChat.HCA_NO_CHIP <- projectData(CellChat.HCA_NO_CHIP, PPI.human)
+CellChat.HCA_CHIP <- projectData(CellChat.HCA_CHIP, PPI.human)
+```
+
+```{r}
+CellChat.HCA_NO_CHIP<- computeCommunProb(CellChat.HCA_NO_CHIP, raw.use = FALSE)
+CellChat.HCA_CHIP <- computeCommunProb(CellChat.HCA_CHIP, raw.use = FALSE)
+
+# Filter out the cell-cell communication if there are only few number of cells in certain cell groups
+CellChat.HCA_NO_CHIP <- filterCommunication(CellChat.HCA_NO_CHIP, min.cells = 10)
+CellChat.HCA_CHIP <- filterCommunication(CellChat.HCA_CHIP, min.cells = 10)
+```
+
+```{r}
+#Infer the cell-cell communication at a signaling pathway level
+CellChat.HCA_NO_CHIP <- computeCommunProbPathway(CellChat.HCA_NO_CHIP)
+CellChat.HCA_CHIP <- computeCommunProbPathway(CellChat.HCA_CHIP)
+```
+
+```{r}
+CellChat.HCA_NO_CHIP <- aggregateNet(CellChat.HCA_NO_CHIP)
+CellChat.HCA_CHIP <- aggregateNet(CellChat.HCA_CHIP)
+```
+
+```{r}
+groupSize <- as.numeric(table(CellChat.HCA_CHIP@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_circle(CellChat.HCA_CHIP@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(CellChat.HCA_CHIP@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+```
+
+```{r}
+mat <- CellChat.HCA_NO_CHIP@net$weight
+par(mfrow = c(3,3), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+```
+
+```{r}
+mat <- CellChat.HCA_CHIP@net$weight
+par(mfrow = c(3,3), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+```
+
+```{r}
+# Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+CellChat.HCA_NO_CHIP <- netAnalysis_computeCentrality(CellChat.HCA_NO_CHIP, slot.name = "netP")
+netAnalysis_signalingRole_network(CellChat.HCA_NO_CHIP, width = 8, height = 2.5, font.size = 10)
+ht1 <- netAnalysis_signalingRole_heatmap(CellChat.HCA_NO_CHIP, pattern = "outgoing")
+ht2 <- netAnalysis_signalingRole_heatmap(CellChat.HCA_NO_CHIP, pattern = "incoming")
+ht1+ht2
+
+CellChat.HCA_CHIP <- netAnalysis_computeCentrality(CellChat.HCA_CHIP, slot.name = "netP")
+netAnalysis_signalingRole_network(CellChat.HCA_CHIP, width = 8, height = 2.5, font.size = 10)
+ht3 <- netAnalysis_signalingRole_heatmap(CellChat.HCA_CHIP, pattern = "outgoing")
+ht4 <- netAnalysis_signalingRole_heatmap(CellChat.HCA_CHIP, pattern = "incoming")
+
+```
+
+```{r}
+saveRDS(CellChat.HCA_NO_CHIP, file = "/media/Helios_scStorage/Mariana/Cellchat_PBMC_HFrEF_REVISION/20230606_CellChat_HFrEF_NO_CHIP.rds")
+saveRDS(CellChat.HCA_CHIP, file = "/media/Helios_scStorage/Mariana/Cellchat_PBMC_HFrEF_REVISION/20230606_CellChat_HFrEF_CHIP.rds")
+```
+
+##Load CellChat packages
+
+```{r} 
+devtools::install_github("sqjin/CellChat")
+library(CellChat)
+library(patchwork)
+options(stringsAsFactors = FALSE)
+
+```
+
+```{r}
+source("/media/EOS_ZMM_shared/Bioinformatic/scRNA-SEQ-ZMM/Import10X-HelperFunctions_SeuratV3.R")
+outputFolder<-"/media/Helios_scStorage/Mariana/Cellchat_PBMC_HFrEF_REVISION/Comparison"
+sink(file = "/media/Helios_scStorage/Mariana/Cellchat_PBMC_HFrEF_REVISION/Comparison/Cellchat_PBMC_HFrEF_Comparison_REVISION.rmd.log", append = FALSE, split = TRUE)
+```
+
+```{r}
+Cellchat.HCA_NO_CHIP <- readRDS("/media/Helios_scStorage/Mariana/Cellchat_PBMC_HFrEF_REVISION/20230606_CellChat_HFrEF_NO_CHIP.rds")
+Cellchat.HCA_CHIP <- readRDS("/media/Helios_scStorage/Mariana/Cellchat_PBMC_HFrEF_REVISION/20230606_CellChat_HFrEF_CHIP.rds")
+Cellchat.HCA_NO_CHIP <- updateCellChat(Cellchat.HCA_NO_CHIP)
+Cellchat.HCA_CHIP <- updateCellChat(Cellchat.HCA_CHIP)
+```
+
+
+```{r}
+object.list <- list(HCA_NO_CHIP = Cellchat.HCA_NO_CHIP, HCA_CHIP = Cellchat.HCA_CHIP)
+cellchat <- mergeCellChat(object.list, add.names = names(object.list), cell.prefix = TRUE)
+#> Merge the following slots: 'data.signaling','net', 'netP','meta', 'idents', 'var.features' , 'DB', and 'LR'.
+cellchat
+#> An object of class CellChat created from a merged object with multiple datasets 
+```
+
+###Figure 1f
+
+```{r}
+    #Sender (Outgiong interactions)
+    sender.interactions.nochip<-as.data.frame(Cellchat.HCA_NO_CHIP@net$count)
+    df<-data.frame(Celltype=rownames(sender.interactions.nochip), Interactions=rowSums(sender.interactions.nochip), Condition="NO_CHIP")
+
+    sender.interactions.chip<-as.data.frame(Cellchat.HCA_CHIP@net$count)
+    tmp<-data.frame(Celltype=rownames(sender.interactions.chip), Interactions=rowSums(sender.interactions.chip), Condition="WITH_CHIP")
+
+    interactions.sender.combined<-rbind(df,tmp)
+    p1 <- ggplot(interactions.sender.combined, aes(reorder(Celltype, -Interactions), y = Interactions, fill = Condition))+
+      geom_bar(stat = "identity", position = position_dodge2()) + labs(title = "Outgoing Interactions per Celltype", y = "Outgoing Interactions") + 
+      theme(plot.title = element_text(hjust = 0.5))
+
+    #Receiver (Incoming interactions)
+    incoming.interactions.nochip<-as.data.frame(Cellchat.HCA_NO_CHIP@net$count)
+    df<-data.frame(Celltype=colnames(sender.interactions.nochip), Interactions=colSums(sender.interactions.nochip), Condition="NO-CHIP")
+
+    incoming.interactions.nochip<-as.data.frame(Cellchat.HCA_NO_CHIP@net$count)
+    tmp<-data.frame(Celltype=colnames(sender.interactions.chip), Interactions=colSums(sender.interactions.chip), Condition="WITH_CHIP")
+
+    df<-rbind(df,tmp)
+    p2 <- ggplot(df, aes(x = reorder(Celltype, -Interactions), y = Interactions, fill = Condition))+
+      geom_bar(stat = "identity", position = position_dodge2()) + labs(title = "Incoming Interactions per Celltype", y = "Incoming Interactions") + 
+      theme(plot.title = element_text(hjust = 0.5))
+
+openxlsx::write.xlsx(interactions.sender.combined, file = paste0(outputFolder,"interactions.sender.combined.hfref.xlsx"), rowNames=T, colNames=T)
+openxlsx::write.xlsx(df, file = paste0(outputFolder,"interactions.receiver.combined.hfref.xlsx"), rowNames=T, colNames=T)
+
+#Use data from xlsx to prepare graph (autocrine interactions and interactions with IC excluded)
+
+library(tidyr)
+NO_CHIP <- c(77, 60, 77, 78, 69,  80) #sender.interactions.nochip["Monocytes",]
+WITH_CHIP <- c( 87, 69, 85, 85, 76,  86) #sender.interactions.chip["Monocytes",]
+
+name <- c("FB", "CM", "EC", "PC", "NC",  "SMC")
+name <-factor(name,levels=unique(name))
+
+df_outgoing_HCA <- data.frame(NO_CHIP,WITH_CHIP, name)
+df_outgoing_HCA2 <- df_outgoing_HCA[, c(2, 1, 3)]
+
+df2 <- tidyr::pivot_longer(df_outgoing_HCA2, cols=c('NO_CHIP','WITH_CHIP'), names_to='variable', 
+values_to="value")
+head(df2)
+
+ggplot(df2, aes(x= name, y=value, fill=variable)) +
+               geom_bar(stat='identity', position='dodge') + 
+               labs(y= "Number of interactions", x= ' ') + 
+               ggtitle("               MC outgoing signals, HFrEF") +
+  theme(
+    panel.background = element_rect(fill='transparent'), #transparent panel bg
+    plot.background = element_rect(fill='transparent', color=NA), #transparent plot bg
+    panel.grid.major = element_blank(), #remove major gridlines
+    panel.grid.minor = element_blank(), #remove minor gridlines
+    legend.background = element_rect(fill='transparent'), #transparent legend bg
+     #transparent legend panel
+  )
+```
+
+##Figure 6b
+
+```{r}
+gg1 <- rankNet(cellchat, mode = "comparison",  sources.use = c(5), targets.use = 3, stacked = T, do.stat = TRUE)
+gg2 <- rankNet(cellchat, mode = "comparison", sources.use = c(5), targets.use = 3, stacked = F, do.stat = TRUE)
+gg1 + gg2
+```
+
+```{r}
+gg1 <- rankNet(cellchat, mode = "comparison",  sources.use = c(5), targets.use = 3, stacked = T, do.stat = TRUE, thresh = 0.05, cutoff.pvalue = 0.05)
+gg2 <- rankNet(cellchat, mode = "comparison", sources.use = c(5), targets.use = 3, stacked = F, do.stat = TRUE, thresh = 0.05, cutoff.pvalue = 0.05)
+gg1 + gg2
+```
+
+```{r}
+gg1 <- rankNet(cellchat, mode = "comparison",  sources.use = c(5), targets.use = 3, stacked = T, do.stat = FALSE, thresh = 0.05, cutoff.pvalue = 0.05, signaling = c('RESISTIN', 'EGF', 'ACTIVIN', 'PRL', 'IGF', 'OSM', 'PARs'))
+gg2 <- rankNet(cellchat, mode = "comparison", sources.use = c(5), targets.use = 3, stacked = F, do.stat = FALSE, thresh = 0.05, cutoff.pvalue = 0.05, signaling = c('RESISTIN', 'EGF', 'ACTIVIN', 'PRL', 'IGF', 'OSM', 'PARs'))
+gg1 + gg2
+```
+
+##Figure c, 6d.2
+
+```{r}
+# define a positive dataset, i.e., the dataset with positive fold change against the other dataset
+pos.dataset = "HCA_CHIP"
+# define a char name used for storing the results of differential expression analysis
+features.name = pos.dataset
+# perform differential expression analysis
+cellchat <- identifyOverExpressedGenes(cellchat, group.dataset = "datasets", pos.dataset = pos.dataset, features.name = features.name, only.pos = FALSE, thresh.pc = 0.1, thresh.fc = 0.1, thresh.p = 0.05)
+#> Use the joint cell labels from the merged CellChat object
+# map the results of differential expression analysis onto the inferred cell-cell communications to easily manage/subset the ligand-receptor pairs of interest
+net <- netMappingDEG(cellchat, features.name = features.name)
+# extract the ligand-receptor pairs with upregulated ligands in CHIP
+net.up <- subsetCommunication(cellchat, net = net, datasets = "HCA_CHIP",ligand.logFC = 0.1, receptor.logFC = NULL)
+# extract the ligand-receptor pairs with upregulated ligands and upregulated recetptors No chip, i.e.,downregulated in Chip
+net.down <- subsetCommunication(cellchat, net = net, datasets = "HCA_NO_CHIP",ligand.logFC = -0.1, receptor.logFC = -0.1)
+```
+
+```{r}
+gene.up <- extractGeneSubsetFromPair(net.up, cellchat)
+gene.down <- extractGeneSubsetFromPair(net.down, cellchat)
+library("writexlsx")
+write_xlsx(net.up,"/media/Helios_scStorage/Mariana/Cellchat_PBMC_HFrEF_REVISION/Comparison/20230606_Cellchat_PBMC_HFrEF_LR_pairs_increased_from_monocytes_NEW_NET.xlsx")
+write_xlsx(net.down,"/media/Helios_scStorage/Mariana/Cellchat_PBMC_HFrEF_REVISION/Comparison/20230606_Cellchat_PBMC_HFrEF_LR_pairs_decreased_from_monocytes_NEW_NET.xlsx")
+```
+
+```{r}
+pairLR.use.up = net.up[, "interaction_name", drop = F]
+gg1 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.up, sources.use = c(5), targets.use = c(3), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Up-regulated signaling in ", names(object.list)[2]))
+#> Comparing communications on a merged object
+pairLR.use.down = net.down[, "interaction_name", drop = F]
+gg2 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.down, sources.use = c(5), targets.use = c(3), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Down-regulated signaling in ", names(object.list)[2]))
+#> Comparing communications on a merged object
+gg1 + gg2
+```
+
+## Suppl. Figure 1a-c
+```{r}
+DefaultAssay(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"RNA"
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes <- PercentageFeatureSet(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, "^MT-", col.name = "percent_mito")
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes <- PercentageFeatureSet(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, "^RP[SL]", col.name = "percent_ribo")
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes <- PercentageFeatureSet(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, "^HB[^(P)]", col.name = "percent_hb")
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes <- PercentageFeatureSet(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, "PECAM1|PF4", col.name = "percent_plat")
+```
+
+```{r fig.height=15, fig.width=8}
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo", "percent_hb", "percent_hb")
+SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes$nCount_RNA_log<-log(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes$nCount_RNA)
+
+p1<-VlnPlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, group.by = "orig.ident", features = c("nFeature_RNA"), pt.size = 0, y.max = 5000) + NoLegend() + theme(axis.text.x = element_text(size = 10), axis.text.y = element_text(size = 12), axis.title.y = element_text(size=12)) + ggtitle("Number of expressed Features") + ylab("Number of expressed Features")
+p2<-VlnPlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, group.by = "orig.ident", features = c( "nCount_RNA_log"), pt.size = 0) + NoLegend() + theme(axis.text.x = element_text(size = 10), axis.text.y = element_text(size = 12), axis.title.y = element_text(size=12)) + ggtitle("Log2 Umi Counts") + ylab("Log2 Umi Counts")
+p3<-VlnPlot(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, group.by = "orig.ident", features = c("percent_mito"), pt.size = 0) + NoLegend() + theme(axis.text.x = element_text(size = 10), axis.text.y = element_text(size = 12), axis.title.y = element_text(size=12)) + ggtitle("Percent MT Content") + ylab("Percent MT Content")
+
+p<-ggarrange(p1,p2,p3, ncol = 3)
+ggsave("/media/Helios_scStorage/Mariana/AllIntegrated_21.03.23/QC-plots/VLNPlot_nFeature_nCount_pMito.svg", device = "svg", height = 5, width = 15, plot = p)
+```
+
+## TO-DO David Suppl. Figure 10a-c
+```{r}
+#Subsluster Monocytes and Fibroblasts #-\> perform Cellchat
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"celltypes"
+table(Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes))
+SeuratObject.monocytes_fibrobalsts <- subset(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, idents = c("Fibroblasts", "Monocytes"))
+```
+
+## Figure 6i
+```{r}
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"condition"
+SeuratObject.MC<-subset(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, idents = c("Human_CTRLsp", 'NO-CHIP', 'CHIP'))
+```
+
+```{r}
+VlnPlot(
+  object = SeuratObject.MC,
+  features = c('EGFR'),
+  group.by = "celltypes",
+  cols = RColorBrewer::brewer.pal("Set3", n=11),
+  pt.size = 0.000001,
+  sort = 'increasing',
+  assay = 'RNA'
+)
+```
+
+```{r}
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"condition"
+SeuratObject.MC<-subset(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, idents = c("Human_HFrEF", 'NO-CHIP', 'CHIP'))
+```
+
+```{r}
+VlnPlot(
+  object = SeuratObject.MC,
+  features = c('EGFR'),
+  group.by = "celltypes",
+  cols = RColorBrewer::brewer.pal("Set3", n=11),
+  pt.size = 0.000001,
+  sort = 'increasing',
+  assay = 'RNA'
+)
+```
+
+## Figure 6h
+```{r}
+#pbmc's (Chip and no-Chip)
+pbmc <- readRDS("/media/Helios_scStorage/Wesley/11275/Mutation.object/DNMT3A.HF.PBMCs.Final.copy.Rds")
+#Keep only Monocytes
+idents <- 'celltypes'
+MC <- subset (pbmc, idents = 'Monocytes')
+Idents(MC)<-"condition"
+MC <- subset(MC, idents = c("CHIP", 'Control'))
+MC$condition <- factor(x = MC$condition, levels = c('Control', 'CHIP'))
+
+cols <- RColorBrewer::brewer.pal("Reds", n=7)
+M <- MC@meta.data %>% mutate(HBEGF_expression = MC@assays$RNA@data["HBEGF", ])
+ggplot(M, aes(x = condition, y = HBEGF_expression, fill = condition))+
+  geom_violin(scale = "width")+
+  geom_jitter(alpha = 0.5,width = 0.3, size=0.00005)+
+  scale_fill_manual(values = c(cols[2], cols[6]))+
+  labs(y = "HBEGF UMI", title = "HBEGF expression in Monocytes")+
+  theme_classic()+
+  theme(legend.position = "bottom", axis.text.x = element_text(color = "black", face = "bold", size = 20), 
+        axis.text.y = element_text(color = "black", size = 20), axis.title = element_text(size = 20), line = element_line(color = "black", size = .5),
+        plot.title = element_text(face = "bold", hjust = 0.5, size = 22))
+mrkrs <- c("HBEGF")
+Idents(MC) <- "condition"
+FindMarkers(object = MC, ident.1 = "CHIP", assay = "RNA", features = mrkrs, logfc.threshold = 0.001)
+```
+
+
+## Suppl. Figure 7a
+```{r}
+#pbmc's (Chip and no-Chip)
+pbmc <- readRDS("/media/Helios_scStorage/Wesley/11275/Mutation.object/DNMT3A.HF.PBMCs.Final.copy.Rds")
+#Keep only Monocytes
+idents <- 'celltypes'
+MC <- subset (pbmc, idents = 'Monocytes')
+Idents(MC)<-"condition"
+MC <- subset(MC, idents = c("CHIP", 'Control'))
+MC$condition <- factor(x = MC$condition, levels = c('Control', 'CHIP'))
+
+cols <- RColorBrewer::brewer.pal("Reds", n=7)
+M <- MC@meta.data %>% mutate(AREG_expression = MC@assays$RNA@data["AREG", ])
+ggplot(M, aes(x = condition, y = AREG_expression, fill = condition))+
+  geom_violin(scale = "width")+
+  geom_jitter(alpha = 0.5,width = 0.3, size=0.00005)+
+  scale_fill_manual(values = c(cols[2], cols[6]))+
+  labs(y = "AREG UMI", title = "AREG expression in Monocytes")+
+  theme_classic()+
+  theme(legend.position = "bottom", axis.text.x = element_text(color = "black", face = "bold", size = 20), 
+        axis.text.y = element_text(color = "black", size = 20), axis.title = element_text(size = 20), line = element_line(color = "black", size = .5),
+        plot.title = element_text(face = "bold", hjust = 0.5, size = 22))
+mrkrs <- c("AREG")
+Idents(MC) <- "condition"
+FindMarkers(object = MC, ident.1 = "CHIP", assay = "RNA", features = mrkrs, logfc.threshold = 0.001)
+```
+
+### Suppl. Figure 7b
+```{r}
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"condition"
+SeuratObject.MC<-subset(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, idents = c("Human_CTRLsp", 'NO-CHIP', 'CHIP'))
+```
+
+```{r}
+VlnPlot(
+  object = SeuratObject.MC,
+  features = c('ERBB4'),
+  group.by = "celltypes",
+  cols = RColorBrewer::brewer.pal("Set3", n=11),
+  pt.size = 0.000001,
+  sort = 'increasing',
+  assay = 'RNA'
+)
+```
+
+```{r}
+VlnPlot(
+  object = SeuratObject.MC,
+  features = c('ERBB2'),
+  group.by = "celltypes",
+  cols = RColorBrewer::brewer.pal("Set3", n=11),
+  pt.size = 0.000001,
+  sort = 'increasing',
+  assay = 'RNA'
+)
+```
+
+### Suppl. Figure 7c
+```{r}
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"condition"
+SeuratObject.MC<-subset(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, idents = c("Human_HFrEF", 'NO-CHIP', 'CHIP'))
+```
+
+```{r}
+VlnPlot(
+  object = SeuratObject.MC,
+  features = c('ERBB4'),
+  group.by = "celltypes",
+  cols = RColorBrewer::brewer.pal("Set3", n=11),
+  pt.size = 0.000001,
+  sort = 'increasing',
+  assay = 'RNA'
+)
+```
+
+```{r}
+VlnPlot(
+  object = SeuratObject.MC,
+  features = c('ERBB2'),
+  group.by = "celltypes",
+  cols = RColorBrewer::brewer.pal("Set3", n=11),
+  pt.size = 0.000001,
+  sort = 'increasing',
+  assay = 'RNA'
+)
+```
+
+
+### Suppl. Figure 8a
+```{r}
+#pbmc's (Chip and no-Chip)
+pbmc <- readRDS("/media/Helios_scStorage/Wesley/11275/Mutation.object/DNMT3A.HF.PBMCs.Final.copy.Rds")
+#Keep only Monocytes
+idents <- 'celltypes'
+MC <- subset (pbmc, idents = 'Monocytes')
+Idents(MC)<-"condition"
+MC <- subset(MC, idents = c("CHIP", 'Control'))
+MC$condition <- factor(x = MC$condition, levels = c('Control', 'CHIP'))
+
+cols <- RColorBrewer::brewer.pal("Reds", n=7)
+M <- MC@meta.data %>% mutate(ADAM8_expression = MC@assays$RNA@data["ADAM8", ])
+ggplot(M, aes(x = condition, y = ADAM8_expression, fill = condition))+
+  geom_violin(scale = "width")+
+  geom_jitter(alpha = 0.5,width = 0.3, size=0.00005)+
+  scale_fill_manual(values = c(cols[2], cols[6]))+
+  labs(y = "ADAM8 UMI", title = "ADAM8 expression in Monocytes")+
+  theme_classic()+
+  theme(legend.position = "bottom", axis.text.x = element_text(color = "black", face = "bold", size = 20), 
+        axis.text.y = element_text(color = "black", size = 20), axis.title = element_text(size = 20), line = element_line(color = "black", size = .5),
+        plot.title = element_text(face = "bold", hjust = 0.5, size = 22))
+mrkrs <- c("ADAM8")
+Idents(MC) <- "condition"
+FindMarkers(object = MC, ident.1 = "CHIP", assay = "RNA", features = mrkrs, logfc.threshold = 0.001)
+```
+
+### Suppl. Figure 8b
+```{r}
+#pbmc's (Chip and no-Chip)
+pbmc <- readRDS("/media/Helios_scStorage/Wesley/11275/Mutation.object/DNMT3A.HF.PBMCs.Final.copy.Rds")
+#Keep only Monocytes
+idents <- 'celltypes'
+MC <- subset (pbmc, idents = 'Monocytes')
+Idents(MC)<-"condition"
+MC <- subset(MC, idents = c("CHIP", 'Control'))
+MC$condition <- factor(x = MC$condition, levels = c('Control', 'CHIP'))
+
+cols <- RColorBrewer::brewer.pal("Reds", n=7)
+M <- MC@meta.data %>% mutate(ADAM9_expression = MC@assays$RNA@data["ADAM9", ])
+ggplot(M, aes(x = condition, y = ADAM8_expression, fill = condition))+
+  geom_violin(scale = "width")+
+  geom_jitter(alpha = 0.5,width = 0.3, size=0.00005)+
+  scale_fill_manual(values = c(cols[2], cols[6]))+
+  labs(y = "ADAM9 UMI", title = "ADAM9 expression in Monocytes")+
+  theme_classic()+
+  theme(legend.position = "bottom", axis.text.x = element_text(color = "black", face = "bold", size = 20), 
+        axis.text.y = element_text(color = "black", size = 20), axis.title = element_text(size = 20), line = element_line(color = "black", size = .5),
+        plot.title = element_text(face = "bold", hjust = 0.5, size = 22))
+mrkrs <- c("ADAM9")
+Idents(MC) <- "condition"
+FindMarkers(object = MC, ident.1 = "CHIP", assay = "RNA", features = mrkrs, logfc.threshold = 0.001)
+```
+
+### Suppl. Figure 10A,B,C,D,E
+```{r}
+
+
+#2.) Subsluster Monocyts and Fibroblasts
+#-> perform Cellchat
+Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes)<-"celltypes"
+table(Idents(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes))
+SeuratObject.monocytes_fibrobalsts <- subset(SeuratObject.combined_HFrEF_CTRLsp_CHIP_NOCHIP_monocytes, idents = c("Fibroblasts", "Monocytes"))
+
+DefaultAssay(SeuratObject.monocytes_fibrobalsts)<-"RNA"
+SeuratObject.monocytes_fibrobalsts <- ScaleData(object = SeuratObject.monocytes_fibrobalsts, verbose = FALSE)
+SeuratObject.monocytes_fibrobalsts<-FindVariableFeatures(SeuratObject.monocytes_fibrobalsts)
+SeuratObject.monocytes_fibrobalsts <- RunPCA(object = SeuratObject.monocytes_fibrobalsts, npcs = 30, verbose = FALSE)
+# t-SNE and Clustering
+SeuratObject.monocytes_fibrobalsts <- RunUMAP(object = SeuratObject.monocytes_fibrobalsts, reduction = "pca", dims = 1:10)
+SeuratObject.monocytes_fibrobalsts <- FindNeighbors(object = SeuratObject.monocytes_fibrobalsts, reduction = "pca", dims = 1:10)
+SeuratObject.monocytes_fibrobalsts <- FindClusters(SeuratObject.monocytes_fibrobalsts, resolution = 0.1)
+```
+
+```{r}
+####Rename FB Subclusters
+Idents(SeuratObject.monocytes_fibrobalsts)<-"seurat_clusters"
+
+SeuratObject.monocytes_fibrobalsts <- RenameIdents(object = SeuratObject.monocytes_fibrobalsts, 
+                                                   '0' = "Monocytes",
+                                                   '1' = "FB1",
+                                                   '2' = "Monocytes",
+                                                   '3' = "Monocytes",
+                                                   '4' = "FB2",
+                                                   '5' = "FB3",
+                                                   '6' = "FB4",
+                                                   '7' = "FB5"
+                                                   )
+SeuratObject.monocytes_fibrobalsts$celltypes_FB_subclusters<-Idents(SeuratObject.monocytes_fibrobalsts)
+```
+
+### Suppl. Figure 10A,B,C,D
+```{r}
+p1<-DimPlot(SeuratObject.monocytes_fibrobalsts, group.by = "condition", label = TRUE, label.size = 5)
+p2<-DimPlot(SeuratObject.monocytes_fibrobalsts, group.by = "celltypes", label = TRUE, label.size = 5)
+p3<-DimPlot(SeuratObject.monocytes_fibrobalsts, group.by = "source", label = TRUE, label.size = 5)
+p4<-DimPlot(SeuratObject.monocytes_fibrobalsts, group.by = "seurat_clusters", label = TRUE, label.size = 5)
+p5<-DimPlot(SeuratObject.monocytes_fibrobalsts, group.by = "celltypes_FB_subclusters", label = TRUE, label.size = 5)
+
+
+p<-ggarrange(p1, p2,p3,p4,p5, ncol = 3, nrow = 2)
+ggsave(paste0(outputFolder,"/SVG/UMAP_HCA_HFrEF_Monocytes_FB_condition_source_cell_types.svg"), device = "svg", height = 5, width = 15, plot = p)
+```
+
+
+```{r}
+####divide datasets and choose only Human_CTRLsp and NO CHIP/CHIP monocytes
+Idents(SeuratObject.monocytes_fibrobalsts)<-"condition"
+#HCA_NO_CHIP<-subset(HCA_ALL, idents = c("Human_CTRLsp", "NO-CHIP"))
+Mono_FB_CHIP<-subset(SeuratObject.monocytes_fibrobalsts, idents = c("Human-HFrEF", "Human_CTRLsp","CHIP"))
+Mono_FB_NO_CHIP<-subset(SeuratObject.monocytes_fibrobalsts, idents = c("Human-HFrEF", "Human_CTRLsp","NO-CHIP"))
+```
+
+```{r}
+####Create CellChat Objects
+library(CellChat)
+Idents(Mono_FB_CHIP) <- Mono_FB_CHIP$celltypes_FB_subclusters
+CellChat.Mono_FB_CHIP <- createCellChat(object = Mono_FB_CHIP, group.by = "celltypes_FB_subclusters", assay = "RNA")
+
+Idents(Mono_FB_NO_CHIP) <- Mono_FB_NO_CHIP$celltypes
+CellChat.Mono_FB_NO_CHIP <- createCellChat(object = Mono_FB_NO_CHIP, group.by = "celltypes_FB_subclusters", assay = "RNA")
+```
+
+```{r}
+####Load Database,use CellChatDB.mouse if running on mouse data
+CellChatDB <- CellChatDB.human
+showDatabaseCategory(CellChatDB)
+
+#Subset DB if necessary
+CellChat.Mono_FB_CHIP@DB <- CellChatDB
+CellChat.Mono_FB_NO_CHIP@DB <- CellChatDB
+
+# subset the expression data of signaling genes for saving computation cost
+CellChat.Mono_FB_CHIP <- subsetData(CellChat.Mono_FB_CHIP) 
+CellChat.Mono_FB_NO_CHIP <- subsetData(CellChat.Mono_FB_NO_CHIP) 
+
+# This step is necessary even if using the whole database
+
+CellChat.Mono_FB_CHIP <- identifyOverExpressedGenes(CellChat.Mono_FB_CHIP)
+CellChat.Mono_FB_CHIP <- identifyOverExpressedInteractions(CellChat.Mono_FB_CHIP)
+
+CellChat.Mono_FB_NO_CHIP <- identifyOverExpressedGenes(CellChat.Mono_FB_NO_CHIP)
+CellChat.Mono_FB_NO_CHIP <- identifyOverExpressedInteractions(CellChat.Mono_FB_NO_CHIP)
+
+# project gene expression data onto PPI network (optional)
+CellChat.Mono_FB_CHIP <- projectData(CellChat.Mono_FB_CHIP, PPI.human)
+CellChat.Mono_FB_NO_CHIP <- projectData(CellChat.Mono_FB_NO_CHIP, PPI.human)
+
+
+CellChat.Mono_FB_CHIP@idents<-CellChat.Mono_FB_CHIP@meta$celltypes_FB_subclusters
+
+CellChat.Mono_FB_CHIP<- computeCommunProb(CellChat.Mono_FB_CHIP, raw.use = FALSE)
+CellChat.Mono_FB_NO_CHIP <- computeCommunProb(CellChat.Mono_FB_NO_CHIP, raw.use = FALSE)
+
+# Filter out the cell-cell communication if there are only few number of cells in certain cell groups
+CellChat.Mono_FB_CHIP <- filterCommunication(CellChat.Mono_FB_CHIP, min.cells = 10)
+CellChat.Mono_FB_NO_CHIP <- filterCommunication(CellChat.Mono_FB_NO_CHIP, min.cells = 10)
+
+#Infer the cell-cell communication at a signaling pathway level
+CellChat.Mono_FB_CHIP <- computeCommunProbPathway(CellChat.Mono_FB_CHIP)
+CellChat.Mono_FB_NO_CHIP <- computeCommunProbPathway(CellChat.Mono_FB_NO_CHIP)
+
+CellChat.Mono_FB_CHIP <- aggregateNet(CellChat.Mono_FB_CHIP)
+CellChat.Mono_FB_NO_CHIP <- aggregateNet(CellChat.Mono_FB_NO_CHIP)
+```
+
+```{r}
+groupSize <- as.numeric(table(CellChat.Mono_FB_CHIP@idents))
+par(mfcol = c(1,2), xpd=TRUE)
+netVisual_circle(CellChat.Mono_FB_CHIP@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(CellChat.Mono_FB_CHIP@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+ggsave("Monocyte_Fibroblasts_subclusters/SVG/Number_of_interactions_CHIP.svg", height = 10, width = 15)
+
+groupSize <- as.numeric(table(CellChat.Mono_FB_NO_CHIP@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_circle(CellChat.Mono_FB_NO_CHIP@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(CellChat.Mono_FB_NO_CHIP@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+ggsave("Monocyte_Fibroblasts_subclusters/SVG/Number_of_interactions_NO_CHIP.svg", height = 10, width = 15)
+```
+
+```{r}
+#Due to the complicated cell-cell communication network, we can examine the signaling sent from each cell group. Here we also control the parameter edge.weight.max so that we can compare edge weights between differet networks.
+mat <- CellChat.Mono_FB_CHIP@net$weight
+par(mfrow = c(3,3), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+  mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+```
+
+```{r}
+mat <- CellChat.Mono_FB_NO_CHIP@net$weight
+par(mfrow = c(3,3), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+```
+
+```{r}
+# Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+CellChat.Mono_FB_CHIP <- netAnalysis_computeCentrality(CellChat.Mono_FB_CHIP, slot.name = "netP")
+netAnalysis_signalingRole_network(CellChat.Mono_FB_CHIP, width = 8, height = 2.5, font.size = 10)
+ht1 <- netAnalysis_signalingRole_heatmap(CellChat.Mono_FB_CHIP, pattern = "outgoing")
+ht2 <- netAnalysis_signalingRole_heatmap(CellChat.Mono_FB_CHIP, pattern = "incoming")
+ht1+ht2
+
+CellChat.Mono_FB_NO_CHIP <- netAnalysis_computeCentrality(CellChat.Mono_FB_NO_CHIP, slot.name = "netP")
+netAnalysis_signalingRole_network(CellChat.Mono_FB_NO_CHIP, width = 8, height = 2.5, font.size = 10)
+ht3 <- netAnalysis_signalingRole_heatmap(CellChat.Mono_FB_NO_CHIP, pattern = "outgoing")
+ht4 <- netAnalysis_signalingRole_heatmap(CellChat.Mono_FB_NO_CHIP, pattern = "incoming")
+
+```
+
+```{r}
+pathways.show <- c("EGF") 
+# Hierarchy plot
+# Here we define `vertex.receive` so that the left portion of the hierarchy plot shows signaling to fibroblast and the right portion shows signaling to monocytes 
+vertex.receiver = seq(3,5) # a numeric vector. 
+netVisual_aggregate(CellChat.Mono_FB_CHIP, signaling = pathways.show,  vertex.receiver = vertex.receiver)
+# Circle plot
+par(mfrow=c(1,1))
+netVisual_aggregate(CellChat.Mono_FB_CHIP, signaling = pathways.show, layout = "circle")
+```
+
+```{r}
+pathways.show <- c("EGF") 
+# Hierarchy plot
+# Here we define `vertex.receive` so that the left portion of the hierarchy plot shows signaling to fibroblast and the right portion shows signaling to monocytes 
+vertex.receiver = seq(3,5) # a numeric vector. 
+netVisual_aggregate(CellChat.Mono_FB_NO_CHIP, signaling = pathways.show,  vertex.receiver = vertex.receiver)
+# Circle plot
+par(mfrow=c(1,1))
+netVisual_aggregate(CellChat.Mono_FB_NO_CHIP, signaling = pathways.show, layout = "circle")
+```
+
+```{r}
+# Chord diagram
+par(mfrow=c(1,1))
+netVisual_aggregate(CellChat.Mono_FB_CHIP, signaling = pathways.show, layout = "chord")
+```
+
+```{r}
+object.list <- list(MONO_FB_NO_CHIP = CellChat.Mono_FB_NO_CHIP, MONO_FB_CHIP = CellChat.Mono_FB_CHIP)
+cellchat <- mergeCellChat(object.list, add.names = names(object.list), cell.prefix = TRUE)
+#> Merge the following slots: 'data.signaling','net', 'netP','meta', 'idents', 'var.features' , 'DB', and 'LR'.
+cellchat
+#> An object of class CellChat created from a merged object with multiple datasets 
+```
+
+```{r}
+gg1 <- compareInteractions(cellchat, show.legend = F, group = c(1,2))
+gg2 <- compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = "weight")
+gg1 + gg2
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/Number of interactions.svg", height = 10, width = 15)
+
+```
+
+```{r}
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(cellchat, weight.scale = T)
+netVisual_diffInteraction(cellchat, weight.scale = T, measure = "weight")
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/DiffInteraction_Mono-FB_NOCHIP_CHIP.svg", height = 10, width = 15)
+```
+
+```{r}
+gg1 <- netVisual_heatmap(cellchat)
+#> Do heatmap based on a merged object
+gg2 <- netVisual_heatmap(cellchat, measure = "weight")
+#> Do heatmap based on a merged object
+gg1 + gg2
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/NetVisualHeatmap_Mono-FB_NOCHIP_CHIP.svg", height = 10, width = 15)
+```
+
+```{r}
+weight.max <- getMaxWeight(object.list, attribute = c("idents","count"))
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_circle(object.list[[i]]@net$count, weight.scale = T, label.edge= F, edge.weight.max = weight.max[2], edge.width.max = 12, title.name = paste0("Number of interactions - ", names(object.list)[i]))
+}
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/NetVisualCircle_Mono-FB_NOCHIP_CHIP.svg", height = 10, width = 15)
+```
+
+```{r}
+num.link <- sapply(object.list, function(x) {rowSums(x@net$count) + colSums(x@net$count)-diag(x@net$count)})
+weight.MinMax <- c(min(num.link), max(num.link)) # control the dot size in the different datasets
+gg <- list()
+for (i in 1:length(object.list)) {
+  gg[[i]] <- netAnalysis_signalingRole_scatter(object.list[[i]], title = names(object.list)[i], weight.MinMax = weight.MinMax)
+}
+#> Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+#> Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+patchwork::wrap_plots(plots = gg)
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/NetAnalysis_signalingRole_scatter.svg", height = 10, width = 15)
+```
+
+```{r, fig.height=10, fig.width=15}
+gg1 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "Monocytes")
+#> Visualizing differential outgoing and incoming signaling changes
+#> The following `from` values were not present in `x`: 0
+#> The following `from` values were not present in `x`: 0, -1
+gg2 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "FB1")
+gg3 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "FB2")
+gg4 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "FB3")
+gg5 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "FB4")
+gg6 <- netAnalysis_signalingChanges_scatter(cellchat, idents.use = "FB5")
+#> Visualizing differential outgoing and incoming signaling changes
+#> The following `from` values were not present in `x`: 0, 2
+#> The following `from` values were not present in `x`: 0, -1
+ggpubr::ggarrange(plotlist = list(gg1,gg2,gg3,gg4,gg5,gg6))
+patchwork::wrap_plots(plots = list(gg1,gg2,gg3,gg4,gg5,gg6))
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/Differential_Interactions_Per_Cluster.svg", height = 10, width = 20)
+```
+
+```{r}
+cellchat <- computeNetSimilarityPairwise(cellchat, type = "functional")
+#> Compute signaling network similarity for datasets 1 2
+cellchat <- netEmbedding(cellchat, type = "functional", umap.method = "uwot")
+#> Manifold learning of the signaling networks for datasets 1 2
+cellchat <- netClustering(cellchat, type = "functional", do.parallel = F)
+#> Classification learning of the signaling networks for datasets 1 2
+# Visualization in 2D-space
+netVisual_embeddingPairwise(cellchat, type = "functional", label.size = 3.5)
+
+#> 2D visualization of signaling networks from datasets 1 2
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/Pairwise_Embedding.svg", height = 10, width = 10)
+
+```
+
+```{r}
+netVisual_embeddingZoomIn(cellchat, type = "functional", nCol = 2)
+```
+
+```{r}
+gg1 <- rankNet(cellchat, mode = "comparison",  sources.use = 5, targets.use = 3, stacked = T, do.stat = TRUE)
+gg2 <- rankNet(cellchat, mode = "comparison", sources.use = 5, targets.use = 3, stacked = F, do.stat = TRUE)
+gg1 + gg2
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/InteractionFlow_5_to_3.svg", height = 10, width = 15)
+
+```
+
+```{r}
+gg1 <- rankNet(cellchat, mode = "comparison", stacked = T, do.stat = TRUE)
+gg2 <- rankNet(cellchat, mode = "comparison", stacked = F, do.stat = TRUE)
+gg1 + gg2
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/InteractionFlow.svg", height = 10, width = 15)
+```
+
+```{r}
+library(ComplexHeatmap)
+#> Loading required package: grid
+#> ========================================
+#> ComplexHeatmap version 2.10.0
+#> Bioconductor page: http://bioconductor.org/packages/ComplexHeatmap/
+#> Github page: https://github.com/jokergoo/ComplexHeatmap
+#> Documentation: http://jokergoo.github.io/ComplexHeatmap-reference
+#> 
+#> If you use it in published research, please cite:
+#> Gu, Z. Complex heatmaps reveal patterns and correlations in multidimensional 
+#>   genomic data. Bioinformatics 2016.
+#> 
+#> The new InteractiveComplexHeatmap package can directly export static 
+#> complex heatmaps into an interactive Shiny app with zero effort. Have a try!
+#> 
+#> This message can be suppressed by:
+#>   suppressPackageStartupMessages(library(ComplexHeatmap))
+#> ========================================
+i = 1
+# combining all the identified signaling pathways from different datasets 
+pathway.union <- union(object.list[[i]]@netP$pathways, object.list[[i+1]]@netP$pathways)
+ht1 = netAnalysis_signalingRole_heatmap(object.list[[i]], pattern = "outgoing", signaling = pathway.union, title = names(object.list)[i], width = 5, height = 6)
+ht2 = netAnalysis_signalingRole_heatmap(object.list[[i+1]], pattern = "outgoing", signaling = pathway.union, title = names(object.list)[i+1], width = 5, height = 6)
+draw(ht1 + ht2, ht_gap = unit(0.5, "cm"))
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/Signal_Heatmap.svg", height = 10, width = 15)
+```
+
+
+```{r}
+netVisual_bubble(cellchat, sources.use = 1, targets.use = (2:5), comparison = c(1, 2), angle.x = 45)
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/NetVisualBubble_Heatmap.svg", height = 10, width = 15)
+#> Comparing communications on a merged object
+```
+
+```{r}
+rankSimilarity(cellchat, type = "functional")
+#> Compute the distance of signaling networks between datasets 1 2
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/Pathway_Distance.svg", height = 10, width = 15)
+```
+
+```{r}
+gg1 <- netVisual_bubble(cellchat, sources.use = 1, targets.use = c(2:5),  comparison = c(1, 2), max.dataset = 2, title.name = "Increased signaling in CHIP", angle.x = 45, remove.isolate = T, thresh = 0.001)
+#> Comparing communications on a merged object
+gg2 <- netVisual_bubble(cellchat, sources.use = 1, targets.use = c(2:5),  comparison = c(1, 2), max.dataset = 1, title.name = "Decreased signaling in CHIP", angle.x = 45, remove.isolate = T, thresh = 0.001)
+#> Comparing communications on a merged object
+gg1 + gg2
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/BublePlot_Increase_Decreased.svg", height = 10, width = 15)
+```
+
+```{r}
+# define a positive dataset, i.e., the dataset with positive fold change against the other dataset
+pos.dataset = "MONO_FB_CHIP"
+# define a char name used for storing the results of differential expression analysis
+features.name = pos.dataset
+# perform differential expression analysis
+cellchat <- identifyOverExpressedGenes(cellchat, group.dataset = "datasets", pos.dataset = pos.dataset, features.name = features.name, only.pos = FALSE, thresh.pc = 0.1, thresh.fc = 0.1, thresh.p = 0.05)
+#> Use the joint cell labels from the merged CellChat object
+# map the results of differential expression analysis onto the inferred cell-cell communications to easily manage/subset the ligand-receptor pairs of interest
+net <- netMappingDEG(cellchat, features.name = features.name)
+# extract the ligand-receptor pairs with upregulated ligands in CHIP
+net.up <- subsetCommunication(cellchat, net = net, datasets = "MONO_FB_CHIP",ligand.logFC = 0.1, receptor.logFC = NULL)
+# extract the ligand-receptor pairs with upregulated ligands and upregulated recetptors No chip, i.e.,downregulated in Chip
+net.down <- subsetCommunication(cellchat, net = net, datasets = "MONO_FB_NO_CHIP",ligand.logFC = -0.1, receptor.logFC = -0.1)
+```
+
+
+```{r}
+gene.up <- extractGeneSubsetFromPair(net.up, cellchat)
+gene.down <- extractGeneSubsetFromPair(net.down, cellchat)
+library("openxlsx")
+write.xlsx(net.up,"Monocyte_Fibroblasts_subclusters/20230606_Cellchat_PBMC_MONO_FB_LR_pairs_increased_from_monocytes_NEW_NET.xlsx", rowNames=T, colNames=T)
+write.xlsx(net.down,"Monocyte_Fibroblasts_subclusters/202300606_Cellchat_PBMC_MONO_FB_LR_pairs_decreased_from_monocytes_NEW_NET.xlsx", rowNames=T, colNames=T)
+```
+
+### Suppl. Figure 10E
+```{r}
+pairLR.use.up = net.up[, "interaction_name", drop = F]
+gg1 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.up, sources.use = 1, targets.use = c(1:5), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Up-regulated signaling in ", names(object.list)[1]))
+#> Comparing communications on a merged object
+pairLR.use.down = net.down[, "interaction_name", drop = F]
+gg2 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.down, sources.use = 1, targets.use = c(1:5), comparison = c(1, 2),  angle.x = 90, remove.isolate = T,title.name = paste0("Down-regulated signaling in ", names(object.list)[1]))
+#> Comparing communications on a merged object
+gg1 + gg2
+ggsave( "Monocyte_Fibroblasts_subclusters/SVG/Communication_up_down.svg", height = 10, width = 15)
+```
+
+```{r}
+# Chord diagram
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_chord_gene(object.list[[2]], sources.use = 1, targets.use = c(3), slot.name = 'net', net = net.up, lab.cex = 0.8, small.gap = 3.5, title.name = paste0("Up-regulated signaling in ", names(object.list)[2]))
+netVisual_chord_gene(object.list[[1]], sources.use = 1, targets.use = c(3), slot.name = 'net', net = net.down, lab.cex = 0.8, small.gap = 3.5, title.name = paste0("Down-regulated signaling in ", names(object.list)[2]))
+```
+
+
+
+
